@@ -69,3 +69,11 @@ def test_promotion_and_deploy_preserve_exact_sha_lock_health_and_rollback() -> N
     assert "scripts/ops/check_runtime_readiness.py" in deploy
     assert "tee /tmp/aicrm-runtime-readiness.json" in deploy
     assert deploy_ssh_step["with"]["command_timeout"] == "20m"
+
+
+def test_active_production_callback_relay_uses_current_host() -> None:
+    relay = (WORKFLOWS / "relay-id-validation-wecom-callback.yml").read_text(encoding="utf-8")
+    assert "EXPECTED_SOURCE_HOST: 124.220.53.183" in relay
+    assert "RELAY ONE CALLBACK FROM 124 TO 49" in relay
+    assert "SHA256:qbHmMUPtj9373JhvK807wWcewj5xxhOfuCwq1gu16n8" in relay
+    assert "150.158.82.186" not in relay
