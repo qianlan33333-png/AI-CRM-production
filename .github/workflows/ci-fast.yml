@@ -1,21 +1,20 @@
-name: CI Fast
+name: PR Gate
 
 on:
   pull_request:
-  push:
     branches:
       - main
-  workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-fast-${{ github.event.pull_request.number || github.ref }}
+  group: pr-gate-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 jobs:
-  ci-fast-result:
+  pr-gate:
+    name: pr / gate
     runs-on: ubuntu-latest
     timeout-minutes: 25
     services:
@@ -66,24 +65,24 @@ jobs:
           cache: npm
           cache-dependency-path: package-lock.json
 
-      - name: Select current behavior tests
-        id: selection
-        run: >-
-          python scripts/ci/select_test_scope.py
-          --json-output "$RUNNER_TEMP/current-test-selection.json"
-          --github-output "$GITHUB_OUTPUT"
-
-      - name: Run selected tier on this runner
+      - name: Check code and core behavior
         env:
           DATABASE_URL: postgresql://test:test@localhost:5432/test
           AICRM_TEST_DATABASE_URL: postgresql://test:test@localhost:5432/test
-        run: python scripts/ci/run_ci.py --selection-file "$RUNNER_TEMP/current-test-selection.json"
+          AICRM_NEXT_ENV: test
+          AICRM_NEXT_DATA_SOURCE: fixture
+          AICRM_WECOM_EXECUTION_MODE: disabled
+          SECRET_KEY: pr-gate-test-secret
+          WECHAT_SHOP_CALLBACK_TOKEN: pr-gate-callback-token
+        run: |
+          make check
+          python -m pytest tests/high_risk tests/release -q --tb=short --timeout=120 --timeout-method=thread
 
       - name: Upload failure diagnostics
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1 (Node 24)
         with:
-          name: ci-fast-failure-${{ github.run_id }}-${{ github.run_attempt }}
+          name: pr-gate-failure-${{ github.run_id }}-${{ github.run_attempt }}
           path: test-results/ci
           if-no-files-found: warn
           retention-days: 3

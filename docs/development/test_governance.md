@@ -45,13 +45,12 @@ or `release`. Its output is development evidence only, not production evidence.
 
 ## Cloud workflow
 
-`CI Fast` owns one required job named `ci-fast-result`. Pull requests are
-classified as `fast` or `high_risk`; unknown runtime paths and deleted files fail
-closed to `high_risk`. Main pushes run only the release gate. Full regression is
-available only through `workflow_dispatch` or `workflow_call` and has no
-schedule. The deployment promotion workflow still consumes the successful
-`CI Fast` main-push SHA and passes that exact SHA to the existing production
-deployment workflow.
+`PR Gate` owns one required job named `pr / gate`. Every pull request runs the
+same fixed code checks plus the high-risk and release suites; there is no path
+classifier in the required workflow. A push to `main` starts one automatic
+deployment workflow, runs the complete current suite, and deploys that exact
+`main` SHA only after the suite passes. Full regression remains a reusable
+implementation detail and has no schedule.
 
 Production data and real provider calls are forbidden in every test layer.
 PostgreSQL tests accept only a local host and a database name containing `test`.
