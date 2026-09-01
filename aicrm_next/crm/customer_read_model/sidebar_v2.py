@@ -183,27 +183,25 @@ class SidebarV2SqlRepository:
         self._engine = engine or get_engine(database_url=_database_url())
 
     def get_profile_fields(self, external_userid: str) -> dict[str, Any] | None:
-        identity = self._resolve_identity(external_userid=external_userid)
-        if identity is None:
-            return None
         return self._one(
             """
-            SELECT
-                :external_userid AS external_userid,
-                profile.source,
-                profile.industry,
-                profile.industry_description,
-                profile.needs_blockers_followup,
-                profile.updated_by,
-                profile.updated_at
+            WITH customer_scope AS (
+                SELECT COALESCE(root.id, c.id) customer_id, im.unionid
+                FROM wecom_external_contact_identity_map im JOIN customers c ON c.id = im.customer_id
+                LEFT JOIN customers root ON root.id = c.merged_into_customer_id
+                WHERE im.external_userid = :external_userid AND im.status = 'active'
+                ORDER BY im.updated_at DESC, im.id DESC LIMIT 1
+            )
+            SELECT :external_userid external_userid, profile.source, profile.industry,
+                   profile.industry_description, profile.needs_blockers_followup,
+                   profile.updated_by, profile.updated_at
             FROM sidebar_customer_profile_fields profile
-            WHERE profile.unionid = :unionid
-            ORDER BY profile.updated_at DESC
-            LIMIT 1
+            JOIN customer_scope scope ON profile.customer_id = scope.customer_id
+              OR (profile.customer_id IS NULL AND profile.unionid <> '' AND profile.unionid = scope.unionid)
+            ORDER BY profile.updated_at DESC LIMIT 1
             """,
-            {"external_userid": external_userid, "unionid": _text(identity.unionid)},
+            {"external_userid": external_userid},
         )
-
     def get_workflow_title_for_customer(self, external_userid: str) -> str:
         identity = self._resolve_identity(external_userid=external_userid)
         if identity is None:
@@ -246,16 +244,21 @@ class SidebarV2SqlRepository:
     def get_external_identity_snapshot(self, external_userid: str) -> dict[str, Any] | None:
         identity = self._resolve_identity(external_userid=external_userid)
         if identity is None:
-            return None
-        return {
-            "external_userid": _text(identity.external_userid),
-            "follow_user_userid": _text(identity.follow_user_userid or identity.owner_userid),
-            "name": _text(identity.customer_name),
-            "unionid": _text(identity.unionid),
-            "openid": _text(identity.openid),
-            "status": "active",
-        }
-
+            return self._one(
+                """
+                SELECT im.external_userid, COALESCE(NULLIF(fu.user_id, ''), im.follow_user_userid) follow_user_userid,
+                       im.name, im.unionid, im.openid, im.status, im.customer_id
+                FROM wecom_external_contact_identity_map im LEFT JOIN wecom_external_contact_follow_users fu
+                  ON fu.corp_id = im.corp_id AND fu.external_userid = im.external_userid AND fu.relation_status = 'active'
+                WHERE im.external_userid = :external_userid AND im.status = 'active'
+                ORDER BY fu.is_primary DESC NULLS LAST, fu.updated_at DESC NULLS LAST
+                LIMIT 1
+                """,
+                {"external_userid": external_userid},
+            )
+        return {"external_userid": _text(identity.external_userid), "name": _text(identity.customer_name),
+                "follow_user_userid": _text(identity.follow_user_userid or identity.owner_userid),
+                "unionid": _text(identity.unionid), "openid": _text(identity.openid), "status": "active"}
     def get_contact_owner_userids(self, external_userid: str) -> set[str]:
         rows = self._all(
             """
@@ -584,30 +587,27 @@ class SidebarV2SqlRepository:
         return rows[0] if rows else None
 
     def list_questionnaire_answers(self, *, external_userid: str, mobile: str = "") -> list[dict[str, Any]]:
-        identity = self._resolve_identity(external_userid=external_userid, mobile=mobile)
-        if identity is None:
-            return []
         return self._all(
             """
-            SELECT
-                s.id AS submission_id,
-                q.id AS questionnaire_id,
-                COALESCE(NULLIF(q.title, ''), NULLIF(q.name, ''), q.slug, '未命名问卷') AS questionnaire_title,
-                s.submitted_at,
-                a.question_id,
-                COALESCE(NULLIF(a.question_title_snapshot, ''), '未命名问题') AS question,
-                a.selected_option_texts_snapshot,
-                a.text_value
+            WITH customer_scope AS (
+                SELECT COALESCE(root.id, c.id) customer_id, im.unionid
+                FROM wecom_external_contact_identity_map im JOIN customers c ON c.id = im.customer_id
+                LEFT JOIN customers root ON root.id = c.merged_into_customer_id
+                WHERE im.external_userid = :external_userid AND im.status = 'active'
+                ORDER BY im.updated_at DESC, im.id DESC LIMIT 1
+            )
+            SELECT s.id submission_id, q.id questionnaire_id,
+                   COALESCE(NULLIF(q.title, ''), NULLIF(q.name, ''), q.slug, '未命名问卷') questionnaire_title,
+                   s.submitted_at, a.question_id, COALESCE(NULLIF(a.question_title_snapshot, ''), '未命名问题') question,
+                   a.selected_option_texts_snapshot, a.text_value
             FROM questionnaire_submissions s
-            JOIN crm_user_identity identity ON identity.unionid = s.unionid
-            LEFT JOIN questionnaires q ON q.id = s.questionnaire_id
-            LEFT JOIN questionnaire_submission_answers a ON a.submission_id = s.id
-            WHERE identity.unionid = :unionid
+            JOIN customer_scope scope ON s.customer_id = scope.customer_id
+              OR (s.customer_id IS NULL AND s.unionid <> '' AND s.unionid = scope.unionid)
+            LEFT JOIN questionnaires q ON q.id = s.questionnaire_id LEFT JOIN questionnaire_submission_answers a ON a.submission_id = s.id
             ORDER BY s.submitted_at DESC, s.id DESC, a.id ASC
             """,
-            {"unionid": _text(identity.unionid)},
+            {"external_userid": external_userid},
         )
-
     def list_other_staff_messages(
         self,
         external_userid: str,

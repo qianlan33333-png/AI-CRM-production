@@ -102,6 +102,26 @@ PUSH_CAPABILITY_ADVANCED_KEYS = (
 )
 EXTRA_SETTING_DEFINITIONS: dict[str, dict[str, Any]] = {
     **RUNTIME_CONFIG_DEFINITIONS,
+    "AICRM_ONEID_READ_ENABLED": {
+        "key": "AICRM_ONEID_READ_ENABLED",
+        "label": "OneID 侧边栏读切换",
+        "mode": "editable",
+        "input_type": "text",
+        "type": "boolean",
+        "section": "sidebar_identity",
+        "capability_id": "core.crm",
+        "description": "默认开启；设为 false 可回退到既有企微关系授权读取，OneID 写入和合并血缘仍保留。",
+    },
+    "WECHAT_OPEN_PLATFORM_SCOPE_ID": {
+        "key": "WECHAT_OPEN_PLATFORM_SCOPE_ID",
+        "label": "微信开放平台身份作用域",
+        "mode": "editable",
+        "input_type": "text",
+        "type": "string",
+        "section": "sidebar_identity",
+        "capability_id": "core.crm",
+        "description": "UnionID 唯一性所属的微信开放平台作用域；为空时使用当前私有化默认作用域。",
+    },
     "SIDEBAR_PRODUCT_CONTEXT_TOKEN_TTL_SECONDS": {
         "key": "SIDEBAR_PRODUCT_CONTEXT_TOKEN_TTL_SECONDS",
         "label": "侧边栏商品上下文有效期",

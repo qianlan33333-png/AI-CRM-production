@@ -275,7 +275,7 @@ def _run_private(job, dispatch_result) -> dict[str, Any]:
         corp_id=_text(payload.get("corp_id") or queue_row.get("corp_id")),
     )
     result_status = _text(result.get("status"))
-    if result_status not in {"success", "pending_identity"}:
+    if result_status not in {"success", "pending_identity", "conflict"}:
         return {
             "ok": False,
             "error": _text(result.get("reason")) or "identity_provider_result_apply_failed",
@@ -320,11 +320,18 @@ def _run_private(job, dispatch_result) -> dict[str, Any]:
             identity_sync=result,
         )
 
+    completion_status = {
+        "success": "resolved",
+        "pending_identity": "pending",
+        "conflict": "conflict",
+    }[result_status]
+    if _text(result.get("unionid_status")) == "not_applicable":
+        completion_status = "ignored"
     persisted = _persist_completion_receipt(
         job=job,
         attempt_id=attempt_id,
         queue_id=queue_id,
-        result_status="resolved" if result_status == "success" else "conflict",
+        result_status=completion_status,
         result=result,
     )
     consumed = _consume_provider_result(attempt_id, job_id=int(job.id))
@@ -332,7 +339,7 @@ def _run_private(job, dispatch_result) -> dict[str, Any]:
         "ok": True,
         "deduplicated": not persisted,
         "queue_id": queue_id,
-        "result_status": "resolved" if result_status == "success" else "conflict",
+        "result_status": completion_status,
         "diagnostic_ok": bool(diagnostic.get("ok")),
         "canonical_status": _text(canonical.get("status")),
         "profile_description_status": _text(profile_description.get("status")),
@@ -401,13 +408,13 @@ def _persist_completion_receipt(
                 job_id=int(job.id),
                 attempt_id=attempt_id,
                 queue_id=queue_id,
-                result_status="resolved" if result_status == "resolved" else "conflict",
+                result_status=result_status,
                 result_summary_json=_json_summary(result),
                 execution_id=f"exe_identity_completion_{uuid4().hex}",
                 parent_execution_id=_text(job.execution_id),
                 resolved_unionid=_text(result.get("unionid")),
                 conflict_reason=(
-                    "" if result_status == "resolved" else _text(result.get("reason")) or "missing_unionid"
+                    _text(result.get("reason")) or "identity_conflict" if result_status == "conflict" else ""
                 ),
             ),
         )

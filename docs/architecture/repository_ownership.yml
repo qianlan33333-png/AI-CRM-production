@@ -361,6 +361,7 @@ repositories:
     table_reads:
       - crm_user_identity
       - crm_user_identity_resolution_queue
+      - wecom_external_contact_identity_map
     table_writes:
       - crm_user_identity
       - crm_user_identity_conflicts
@@ -599,6 +600,26 @@ repositories:
     table_writes:
       - crm_user_identity
       - crm_user_identity_conflicts
+  aicrm_next/crm/identity_contact/oneid_repository.py:
+    capability_owner: aicrm_next.crm.identity_contact
+    table_reads:
+      - crm_user_identity_resolution_queue
+      - customer_identities
+      - customers
+      - sidebar_customer_profile_fields
+      - wecom_external_contact_follow_users
+    table_writes:
+      - contact_tags
+      - crm_user_identity
+      - crm_user_identity_resolution_queue
+      - customer_identities
+      - customer_identity_conflicts
+      - customer_merges
+      - customers
+      - questionnaire_submissions
+      - sidebar_customer_profile_fields
+      - wecom_external_contact_follow_users
+      - wecom_external_contact_identity_map
   aicrm_next/crm/identity_contact/repo.py:
     capability_owner: aicrm_next.crm.identity_contact
     table_reads:
@@ -628,7 +649,8 @@ repositories:
       - identity_resolution_completion_receipt
   aicrm_next/crm/identity_contact/write_repository.py:
     capability_owner: aicrm_next.crm.identity_contact
-    table_reads: []
+    table_reads:
+      - wecom_external_contact_identity_map
     table_writes:
       - crm_user_identity
       - crm_user_identity_resolution_queue
@@ -893,6 +915,8 @@ repositories:
     table_reads:
       - app_settings
       - crm_user_identity
+      - customer_identities
+      - customers
       - questionnaire_external_push_logs
       - questionnaire_options
       - questionnaire_questions
@@ -900,6 +924,7 @@ repositories:
       - questionnaire_submission_answers
       - questionnaire_submissions
       - questionnaires
+      - wecom_external_contact_identity_map
     table_writes:
       - questionnaire_options
       - questionnaire_questions
@@ -974,13 +999,12 @@ repositories:
     table_reads:
       - attachment_library
       - crm_user_identity
+      - customers
       - image_library
       - miniprogram_library
       - wecom_external_contact_follow_users
       - wecom_external_contact_identity_map
     table_writes: []
-    non_literal_table_reads:
-      - crm_user_identity
   aicrm_next/extensions/hxc/operation_cycles/action_repository.py:
     capability_owner: aicrm_next.extensions.hxc.operation_cycles
     table_reads:

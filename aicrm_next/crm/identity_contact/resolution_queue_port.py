@@ -5,7 +5,7 @@ from typing import Any, Literal, Protocol
 
 
 IdentityResolutionBackfillOutcome = Literal["resolved", "retryable", "failed"]
-IdentityResolutionCompletionStatus = Literal["resolved", "conflict"]
+IdentityResolutionCompletionStatus = Literal["resolved", "conflict", "pending", "ignored"]
 
 
 @dataclass(frozen=True)

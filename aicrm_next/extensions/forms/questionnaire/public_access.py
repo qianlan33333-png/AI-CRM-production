@@ -75,24 +75,23 @@ class QuestionnaireRespondentIdentityService:
         for field in IDENTITY_FIELDS:
             if not identity.get(field) and query_identity.get(field):
                 identity[field] = query_identity[field]
+        for field in ("app_id", "customer_id", "respondent_identity_id"):
+            value = _text(raw_cookie_identity.get(field))
+            if value:
+                identity[field] = value
         anonymous = False
         cookie_value = ""
         cookie_name = COOKIE_NAME
         if not any(identity.get(field) for field in IDENTITY_FIELDS):
             anonymous = True
             identity["respondent_key"] = f"anon_{uuid4().hex}"
-            cookie_value = build_questionnaire_h5_identity_cookie(
-                {"respondent_key": identity["respondent_key"], "slug": slug, "anonymous": True}
-            )
+            cookie_value = build_questionnaire_h5_identity_cookie({"respondent_key": identity["respondent_key"], "slug": slug, "anonymous": True})
         elif not cookie_identity and query_has_identity:
             anonymous = _text(identity.get("respondent_key")).startswith("anon_")
-            cookie_value = build_questionnaire_h5_identity_cookie(
-                {**identity, "slug": slug, "anonymous": anonymous}
-            )
-        elif (
-            cookie_is_anonymous
-            and identity.get("respondent_key") == cookie_identity.get("respondent_key")
-        ) or _text(identity.get("respondent_key")).startswith("anon_"):
+            cookie_value = build_questionnaire_h5_identity_cookie({**identity, "slug": slug, "anonymous": anonymous})
+        elif (cookie_is_anonymous and identity.get("respondent_key") == cookie_identity.get("respondent_key")) or _text(
+            identity.get("respondent_key")
+        ).startswith("anon_"):
             anonymous = True
         return {
             "ok": True,
@@ -137,9 +136,7 @@ class QuestionnaireSubmissionStatusService:
         redirect_url = _text(item.get("redirect_url"))
         questionnaire = normalize_questionnaire(item)
         completion_projection = (
-            resolve_questionnaire_completion_action(item)
-            if submission
-            else {"completion_action": {"type": "default", "redirect_url": ""}, "lead_qr": None}
+            resolve_questionnaire_completion_action(item) if submission else {"completion_action": {"type": "default", "redirect_url": ""}, "lead_qr": None}
         )
         return {
             "ok": True,

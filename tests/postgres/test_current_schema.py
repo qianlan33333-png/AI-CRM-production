@@ -2,11 +2,20 @@ from __future__ import annotations
 
 import pytest
 
+from aicrm_next.crm.identity_contact.business_references import (
+    ONEID_MULTI_REFERENCE_TABLES,
+    ONEID_SINGLE_REFERENCE_TABLES,
+)
+
 
 pytestmark = pytest.mark.postgres
 
 
 CRITICAL_CURRENT_TABLES = {
+    "customers",
+    "customer_identities",
+    "customer_merges",
+    "customer_identity_conflicts",
     "contacts",
     "crm_user_identity",
     "customer_list_index_next",
@@ -39,13 +48,24 @@ def test_identity_and_queue_columns_match_current_runtime_contract(pg_connection
             SELECT table_name, column_name
             FROM information_schema.columns
             WHERE table_schema = 'public'
-              AND table_name IN ('crm_user_identity', 'external_effect_job', 'webhook_inbox')
+              AND table_name IN (
+                  'crm_user_identity', 'crm_user_identity_resolution_queue',
+                  'wecom_external_contact_identity_map', 'wecom_external_contact_follow_users',
+                  'sidebar_customer_profile_fields', 'contact_tags', 'questionnaire_submissions',
+                  'external_effect_job', 'webhook_inbox'
+              )
             """
         )
         columns: dict[str, set[str]] = {}
         for table_name, column_name in cursor.fetchall():
             columns.setdefault(table_name, set()).add(column_name)
     assert {"unionid", "primary_external_userid", "primary_openid"} <= columns["crm_user_identity"]
+    assert "customer_id" in columns["crm_user_identity"]
+    assert {"customer_id", "identity_id", "enrichment_status"} <= columns["crm_user_identity_resolution_queue"]
+    assert {"customer_id", "identity_id"} <= columns["wecom_external_contact_identity_map"]
+    assert {"customer_id", "identity_id"} <= columns["wecom_external_contact_follow_users"]
+    for table_name in ("sidebar_customer_profile_fields", "contact_tags", "questionnaire_submissions"):
+        assert "customer_id" in columns[table_name]
     assert {
         "tenant_id",
         "idempotency_key",
@@ -59,6 +79,53 @@ def test_identity_and_queue_columns_match_current_runtime_contract(pg_connection
     assert {"idempotency_key", "status", "attempt_count"} <= columns["webhook_inbox"]
 
 
+def test_business_tables_expose_canonical_oneid_references(pg_connection) -> None:
+    table_names = tuple(
+        sorted(
+            set(ONEID_SINGLE_REFERENCE_TABLES) | set(ONEID_MULTI_REFERENCE_TABLES) | {"questionnaire_submissions", "archived_messages", "wechat_shop_orders"}
+        )
+    )
+    with pg_connection.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT table_name, column_name
+            FROM information_schema.columns
+            WHERE table_schema = 'public' AND table_name = ANY(%s)
+            """,
+            (list(table_names),),
+        )
+        columns: dict[str, set[str]] = {}
+        for table_name, column_name in cursor.fetchall():
+            columns.setdefault(table_name, set()).add(column_name)
+    for table_name in ONEID_SINGLE_REFERENCE_TABLES:
+        assert "customer_id" in columns[table_name], table_name
+    for table_name in ONEID_MULTI_REFERENCE_TABLES:
+        assert "target_customer_ids_json" in columns[table_name], table_name
+    for table_name in ("alipay_pay_orders", "wechat_pay_orders"):
+        assert {"customer_id", "payer_identity_id"} <= columns[table_name]
+    assert "target_customer_id" in columns["external_effect_job"]
+    assert "respondent_identity_id" in columns["questionnaire_submissions"]
+    assert "customer_identity_id" in columns["archived_messages"]
+    assert {"buyer_identity_id", "buyer_openid"} <= columns["wechat_shop_orders"]
+
+
+def test_oneid_compatibility_functions_are_installed(pg_connection) -> None:
+    expected = {
+        "aicrm_customer_root_id",
+        "aicrm_customer_id_by_unionid",
+        "aicrm_customer_identity_id_by_unionid",
+        "aicrm_customer_id_by_wecom_external_userid",
+        "aicrm_customer_ids_by_unionids",
+        "aicrm_customer_root_ids",
+        "aicrm_customer_id_by_identity",
+        "aicrm_customer_identity_id",
+    }
+    with pg_connection.cursor() as cursor:
+        cursor.execute("SELECT proname FROM pg_proc WHERE proname = ANY(%s)", (list(expected),))
+        found = {row[0] for row in cursor.fetchall()}
+    assert found == expected
+
+
 def test_external_effect_idempotency_is_enforced_by_postgres(pg_connection) -> None:
     with pg_connection.cursor() as cursor:
         cursor.execute(
@@ -68,7 +135,7 @@ def test_external_effect_idempotency_is_enforced_by_postgres(pg_connection) -> N
             WHERE schemaname = 'public' AND tablename = 'external_effect_job'
             """
         )
-        definitions = [row[0].lower().replace('"', '') for row in cursor.fetchall()]
+        definitions = [row[0].lower().replace('"', "") for row in cursor.fetchall()]
     assert any("unique" in definition and "tenant_id" in definition and "idempotency_key" in definition for definition in definitions)
 
 

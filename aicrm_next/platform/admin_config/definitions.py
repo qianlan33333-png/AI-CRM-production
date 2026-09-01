@@ -107,6 +107,13 @@ APP_SETTING_DEFINITIONS = (
         "description": "JSAPI 支付使用的公众号 AppID；为空时复用 WECHAT_MP_APP_ID。",
     },
     {
+        "key": "WECHAT_PAY_APP_SECRET",
+        "label": "微信支付 App Secret",
+        "mode": "masked",
+        "input_type": "password",
+        "description": "JSAPI 支付 AppID 对应的 OAuth 密钥；为空时仅在共用公众号 AppID 时复用 WECHAT_MP_APP_SECRET。",
+    },
+    {
         "key": "WECHAT_PAY_MCH_ID",
         "label": "微信支付商户号",
         "mode": "editable",

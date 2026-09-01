@@ -238,3 +238,26 @@ test("JSSDK bootstrap declares the identified customer so it can return the OAut
   const url = new URL(api.jssdkConfigUrl());
   assert.equal(url.searchParams.get("external_userid"), "external-b");
 });
+
+
+test("a provisioning response keeps the sidebar in identity setup without issuing a customer token", async () => {
+  const api = loadHarness(async (url) => {
+    assert.equal(url, "/api/sidebar/context-token");
+    return jsonResponse(202, {
+      ok: true,
+      context_status: "provisioning",
+      sidebar_owner_token: "",
+      sidebar_owner_token_status: "provisioning",
+      sync_token: "opaque-sync-token",
+      retry_after: 30,
+    });
+  });
+  api.setExternalUserid("external-new");
+
+  assert.equal(await api.refreshSidebarOwnerToken(), false);
+  assert.equal(api.state.sidebar_owner_token, "");
+  assert.equal(api.state.sidebar_owner_token_status, "provisioning");
+  assert.equal(api.state.provisioning_sync_token, "opaque-sync-token");
+  assert.notEqual(api.state.provisioning_retry_timer, null);
+  clearTimeout(api.state.provisioning_retry_timer);
+});

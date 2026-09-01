@@ -130,6 +130,11 @@ CONFIG_SCHEMA: dict[str, dict[str, Any]] = {
                 "required": False,
                 "label": "支付公众号AppID",
             },
+            "WECHAT_PAY_APP_SECRET": {
+                "type": "secret",
+                "required": False,
+                "label": "支付公众号AppSecret",
+            },
             "WECHAT_PAY_MCH_ID": {
                 "type": "string",
                 "required": False,

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import ast
+import importlib
 import json
 import re
 import sys
@@ -12,6 +13,10 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from aicrm_next.platform.shared.sensitive_data import redact_sensitive_data, redact_sensitive_text  # noqa: E402
+from aicrm_next.crm.identity_contact.business_references import (  # noqa: E402
+    ONEID_MULTI_REFERENCE_TABLES,
+    ONEID_SINGLE_REFERENCE_TABLES,
+)
 
 
 SOURCE_ROOT = ROOT / "aicrm_next"
@@ -45,6 +50,7 @@ CHANNEL_CRM_PORT_CONSUMERS = {
 CANONICAL_WRITE_OWNERS = {
     Path("aicrm_next/channels/channel_entry/identity_bridge_repo.py"),
     Path("aicrm_next/crm/identity_contact/oauth_projection_repo.py"),
+    Path("aicrm_next/crm/identity_contact/oneid_repository.py"),
     Path("aicrm_next/crm/identity_contact/payment_projection.py"),
     Path("aicrm_next/crm/identity_contact/repo.py"),
     Path("aicrm_next/crm/identity_contact/write_repository.py"),
@@ -87,6 +93,28 @@ def _missing_unionid_succeeded_branches(path: Path) -> list[int]:
 
 def check() -> list[str]:
     errors: list[str] = []
+    inventory = json.loads((ROOT / "docs/ci/current_behavior_inventory.json").read_text(encoding="utf-8"))
+    migration = importlib.import_module(f"migrations.versions.{inventory['migration_contract']['expected_head']}")
+    migrated_single_tables = (
+        set(migration.SINGLE_CUSTOMER_TABLES)
+        | set(migration.PAYMENT_ORDER_TABLES)
+        | {
+            "automation_channel_entry_runtime",
+            "external_campaign_preparation_recipients",
+        }
+    )
+    if migrated_single_tables != set(ONEID_SINGLE_REFERENCE_TABLES):
+        errors.append("OneID single-reference manifest differs from current migration")
+    if set(migration.MULTI_CUSTOMER_TABLES) != set(ONEID_MULTI_REFERENCE_TABLES):
+        errors.append("OneID multi-reference manifest differs from current migration")
+    migration_source = (ROOT / migration.__file__).read_text(encoding="utf-8")
+    for required in (
+        "aicrm_propagate_customer_merge",
+        "trg_customer_merges_propagate_references",
+        "target_customer_ids_json",
+    ):
+        if required not in migration_source:
+            errors.append(f"OneID merge propagation missing token: {required}")
     resolver_source = _read(RESOLVER)
     for required in (
         "class IdentityResolver(Protocol)",
@@ -129,9 +157,11 @@ def check() -> list[str]:
     for relative in HIGH_RISK_ALIAS_CONSUMERS:
         source = _read(relative)
         imports_central_resolver = "identity_contact.resolver" in source
+        imports_oneid = "identity_contact.oneid_repository" in source
         imports_channel_crm_port = relative in CHANNEL_CRM_PORT_CONSUMERS and "from .crm_port import" in source
         if (
             not imports_central_resolver
+            and not imports_oneid
             and not imports_channel_crm_port
             and relative != Path("aicrm_next/extensions/hxc/hxc_dashboard/postgres_repo.py")
         ):
@@ -152,54 +182,47 @@ def check() -> list[str]:
             errors.append(f"production identity binding still writes legacy canonical path: {forbidden}")
 
     consumer_path = Path("aicrm_next/extensions/commerce/service_period/payment_consumer.py")
-    for line in _missing_unionid_succeeded_branches(consumer_path):
-        errors.append(f"missing_unionid branch returns succeeded: {consumer_path}:{line}")
     consumer_source = _read(consumer_path)
-    if 'status="failed_retryable"' not in consumer_source or 'error_code="missing_unionid"' not in consumer_source:
-        errors.append("service period missing_unionid must be failed_retryable with an explicit error code")
+    if 'status="failed_retryable"' not in consumer_source or 'error_code="missing_customer_id"' not in consumer_source:
+        errors.append("service period missing customer_id must be failed_retryable with an explicit error code")
 
     questionnaire_h5 = _read(Path("aicrm_next/extensions/forms/questionnaire/h5_write.py"))
     if (
-        '"error_code": "identity_pending_unionid" if not unionid else ""' not in questionnaire_h5
-        or '"identity_pending": not bool(unionid and external_userid and follow_user_userid)' not in questionnaire_h5
+        '"error_code": "identity_pending" if not (customer_id and external_userid and follow_user_userid) else ""' not in questionnaire_h5
+        or '"identity_pending": not bool(customer_id and external_userid and follow_user_userid)' not in questionnaire_h5
     ):
         errors.append("questionnaire H5 must expose unresolved canonical identity as queued continuation state")
     questionnaire_consumer = _read(Path("aicrm_next/extensions/forms/questionnaire/event_consumers.py"))
-    if (
-        'if not _text(submission.get("unionid"))' not in questionnaire_consumer
-        or 'status="failed_retryable"' not in questionnaire_consumer
-        or 'error_code="missing_unionid"' not in questionnaire_consumer
-    ):
-        errors.append("questionnaire webhook consumer must keep missing unionid retryable and unsent")
+    if "def questionnaire_webhook_consumer(" not in questionnaire_consumer or "build_questionnaire_external_push_payload(" not in questionnaire_consumer:
+        errors.append("questionnaire webhook consumer must plan from the submission identity without a UnionID gate")
     if (
         "def questionnaire_tag_consumer(" not in questionnaire_consumer
-        or 'error_code="identity_pending_unionid" if "unionid" in missing' not in questionnaire_consumer
-        or 'target_type="unionid"' not in questionnaire_consumer
+        or '("customer_id", customer_id)' not in questionnaire_consumer
+        or 'target_type="external_userid"' not in questionnaire_consumer
     ):
-        errors.append("questionnaire tag consumer must require canonical unionid before planning an effect")
+        errors.append("questionnaire tag consumer must target the verified WeCom relationship under customer_id")
 
     payment_source = _read(Path("aicrm_next/extensions/commerce/public_product/h5_wechat_pay.py"))
-    payment_resolver_source = payment_source.split("def _resolve_payment_identity(", 1)[1].split("\ndef _paid_order_for_product_identity(", 1)[0]
+    payment_resolver_source = payment_source.split("def _resolve_payment_oneid(", 1)[1].split("\ndef _sidebar_recipient_customer_id(", 1)[0]
     if "external_userid" in payment_resolver_source or "mobile=" in payment_resolver_source:
         errors.append("payment identity resolver must not mix sidebar customer context into payer identity")
     payment_create_source = payment_source.split("def create_jsapi_order_response(", 1)[1].split("\ndef order_status_response(", 1)[0]
     required_payment_tokens = (
-        "_resolve_payment_identity(conn, identity, for_update=True)",
-        'order_identity["unionid"] = canonical_unionid',
+        "_resolve_payment_oneid(conn, identity)",
+        '"payer_identity_id": payer_identity_id',
+        '"customer_id": recipient_customer_id',
         '"identity_resolution_required"',
     )
     for token in required_payment_tokens:
         if token not in payment_create_source:
             errors.append(f"payment identity fail-closed boundary missing token: {token}")
-    resolver_position = payment_create_source.find("_resolve_payment_identity(conn, identity, for_update=True)")
+    resolver_position = payment_create_source.find("_resolve_payment_oneid(conn, identity)")
     insert_position = payment_create_source.find("_insert_order(")
     provider_call_position = payment_create_source.find("client.create_jsapi_transaction(transaction_payload)")
-    if min(resolver_position, insert_position, provider_call_position) < 0 or not (
-        resolver_position < insert_position < provider_call_position
-    ):
-        errors.append(
-            "payment identity resolution must happen before order insert, and the local order must exist before WeChat Pay call"
-        )
+    if min(resolver_position, insert_position, provider_call_position) < 0 or not (resolver_position < insert_position < provider_call_position):
+        errors.append("payment identity resolution must happen before order insert, and the local order must exist before WeChat Pay call")
+    if 'raise RuntimeError("wechat_pay_payer_identity_mismatch")' not in payment_source:
+        errors.append("WeChat Pay callback must reject a payer OpenID that differs from the order payer identity")
 
     bridge_service = _read(Path("aicrm_next/channels/channel_entry/identity_bridge_service.py"))
     if "corp_id_mismatch" not in bridge_service or "_single_corp_id" not in bridge_service:

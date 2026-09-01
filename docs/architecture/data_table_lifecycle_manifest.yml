@@ -118,6 +118,7 @@ tables:
     write_owner: aicrm_next.crm.customer_tags
     write_owners:
       - aicrm_next.crm.customer_tags
+      - aicrm_next.crm.identity_contact
     read_owners:
       - customer read model
       - admin WeCom tags payload
@@ -605,6 +606,7 @@ tables:
     write_owner: aicrm_next.crm.customer_read_model
     write_owners:
       - aicrm_next.crm.customer_read_model
+      - aicrm_next.crm.identity_contact
       - aicrm_next.crm.owner_migration
     read_owners:
       - aicrm_next.crm.customer_read_model.sidebar_v2
@@ -1625,6 +1627,9 @@ tables:
     domain: questionnaire
     lifecycle: event
     write_owner: aicrm_next.extensions.forms.questionnaire.repo
+    write_owners:
+      - aicrm_next.extensions.forms.questionnaire.repo
+      - aicrm_next.crm.identity_contact
     read_owners:
       - aicrm_next.extensions.forms.questionnaire.repo
       - aicrm_next.extensions.ai.automation_agents.repository
@@ -3326,7 +3331,85 @@ tables:
     guard_tests:
       - tests/test_data_table_lifecycle_guard.py
       - tests/test_data_health_checks.py::test_schema_drift_guard_reports_manifest_and_live_schema_mismatches
-    notes: Unionid is the only canonical business identity. Channel entry, public payment projection, and sidebar are bounded ingress adapters that mutate only through the identity_contact owner port; every mutation alias lookup uses aicrm_next.crm.identity_contact.resolver and every write targets a resolved active unionid. Declared cross-context read projections must fail closed instead of selecting an arbitrary identity when an alias has multiple candidates.
+    notes: Legacy UnionID compatibility projection. Revision 0172 attaches each row to customers.id while bounded consumers migrate to customer_id dual reads and writes.
+
+  customers:
+    domain: identity_contact
+    lifecycle: canonical
+    write_owner: aicrm_next.crm.identity_contact
+    read_owners:
+      - aicrm_next.crm.customer_read_model
+      - aicrm_next.crm.sidebar_write
+      - aicrm_next.extensions.forms.questionnaire
+    replacement: none; customers.id is the stable internal OneID
+    drop_candidate: false
+    drop_after: ""
+    runtime_entrypoints:
+      - verified WeCom callback ensure customer
+      - verified WeCom detail identity merge
+      - sidebar customer context
+    migration_source: 0172_wecom_oneid_core
+    pii_level: internal_contact
+    guard_tests:
+      - tests/test_data_table_lifecycle_guard.py
+      - tests/postgres/test_current_schema.py
+    notes: Customer login accounts are separate. Merged rows are retained and redirect through merged_into_customer_id.
+
+  customer_identities:
+    domain: identity_contact
+    lifecycle: canonical
+    write_owner: aicrm_next.crm.identity_contact
+    read_owners:
+      - aicrm_next.crm.customer_read_model
+      - aicrm_next.crm.sidebar_write
+    replacement: none; canonical scoped external identity aliases
+    drop_candidate: false
+    drop_after: ""
+    runtime_entrypoints:
+      - verified WeCom callback ensure identity
+      - verified UnionID enrichment
+    migration_source: 0172_wecom_oneid_core
+    pii_level: direct_identifier
+    guard_tests:
+      - tests/test_data_table_lifecycle_guard.py
+      - tests/postgres/test_repository_transactions.py
+    notes: Active identity uniqueness is provider, identity_type, scope_key, normalized_value.
+
+  customer_merges:
+    domain: identity_contact
+    lifecycle: audit
+    write_owner: aicrm_next.crm.identity_contact
+    read_owners:
+      - identity conflict operations
+    replacement: none; immutable OneID merge lineage
+    drop_candidate: false
+    drop_after: ""
+    runtime_entrypoints:
+      - official UnionID conditional merge
+    migration_source: 0172_wecom_oneid_core
+    pii_level: internal_contact
+    guard_tests:
+      - tests/test_data_table_lifecycle_guard.py
+      - tests/postgres/test_repository_transactions.py
+    notes: UnionID customer survives; the source customer is retained as merged.
+
+  customer_identity_conflicts:
+    domain: identity_contact
+    lifecycle: audit
+    write_owner: aicrm_next.crm.identity_contact
+    read_owners:
+      - identity conflict operations
+    replacement: none; OneID strong-identity conflict quarantine
+    drop_candidate: false
+    drop_after: ""
+    runtime_entrypoints:
+      - verified UnionID enrichment conflict
+    migration_source: 0172_wecom_oneid_core
+    pii_level: internal_contact
+    guard_tests:
+      - tests/test_data_table_lifecycle_guard.py
+      - tests/postgres/test_repository_transactions.py
+    notes: Conflicting customers remain separate and no winner is guessed.
 
   crm_user_identity_conflicts:
     domain: identity_contact
@@ -4464,7 +4547,10 @@ tables:
   wecom_external_contact_follow_users:
     domain: identity_contact
     lifecycle: canonical
-    write_owner: aicrm_next.crm.owner_migration
+    write_owner: aicrm_next.crm.identity_contact
+    write_owners:
+      - aicrm_next.crm.identity_contact
+      - aicrm_next.crm.owner_migration
     read_owners:
       - aicrm_next.insights.admin_read_model
       - aicrm_next.extensions.ai.ai_assist
@@ -4485,7 +4571,10 @@ tables:
   wecom_external_contact_identity_map:
     domain: identity_contact
     lifecycle: canonical
-    write_owner: aicrm_next.crm.owner_migration
+    write_owner: aicrm_next.crm.identity_contact
+    write_owners:
+      - aicrm_next.crm.identity_contact
+      - aicrm_next.crm.owner_migration
     read_owners:
       - aicrm_next.insights.admin_read_model
       - aicrm_next.extensions.ai.ai_assist

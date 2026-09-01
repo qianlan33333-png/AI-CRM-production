@@ -296,7 +296,9 @@ def _handle_submit(command: Command) -> dict[str, Any]:
             "openid": (identity.openid if identity else identity_payload.get("openid")) or "",
             "unionid": (identity.unionid if identity else identity_payload.get("unionid")) or "",
             "mobile": identity_payload.get("mobile") or (identity.mobile if identity else "") or "",
-            "binding_status": identity.binding_status if identity else ("identity_pending_unionid" if identity_input_present else "unresolved"),
+            "binding_status": identity.binding_status
+            if identity
+            else ("oneid_resolved" if identity_payload.get("customer_id") else "identity_pending" if identity_input_present else "unresolved"),
             "identity_map_id": identity.identity_map_id if identity else None,
             "follow_user_userid": (identity.follow_user_userid if identity else "") or identity_payload.get("follow_user_userid") or "",
             "matched_by": (identity.matched_by if identity else identity_payload.get("matched_by")) or "",
@@ -347,6 +349,9 @@ def _handle_submit(command: Command) -> dict[str, Any]:
             "questionnaire_id": int(item["id"]),
             "slug": item["slug"],
             "respondent_key": identity_payload.get("respondent_key") or "",
+            "customer_id": int(identity_payload.get("customer_id") or 0),
+            "respondent_identity_id": int(identity_payload.get("respondent_identity_id") or 0),
+            "app_id": identity_payload.get("app_id") or "",
             "external_userid": resolved_identity.get("external_userid") or "",
             "openid": resolved_identity.get("openid") or "",
             "unionid": resolved_identity.get("unionid") or "",
@@ -409,7 +414,7 @@ def _handle_submit(command: Command) -> dict[str, Any]:
     continuation_queued = bool(internal_event or internal_event_outbox)
     external_push_mode = QUESTIONNAIRE_EXTERNAL_PUSH_MODE
     external_push_config = dict(item.get("external_push_config") or {})
-    canonical_identity_resolved = bool(str(submission.get("unionid") or "").strip())
+    canonical_identity_resolved = bool(int(submission.get("customer_id") or 0) or str(submission.get("unionid") or "").strip())
     external_push_configured = bool(external_push_config.get("enabled") or item.get("external_push_enabled"))
     if not external_push_configured:
         external_push_ok = True
@@ -421,7 +426,7 @@ def _handle_submit(command: Command) -> dict[str, Any]:
         external_push_status = "queued"
     elif continuation_queued:
         external_push_ok = True
-        external_push_reason = "durable_internal_event_waiting_for_unionid"
+        external_push_reason = "durable_internal_event_waiting_for_identity"
         external_push_status = "queued"
     else:
         external_push_ok = False
@@ -561,6 +566,9 @@ def _handle_diagnostics(command: Command) -> dict[str, Any]:
 def _identity_payload(raw: Any) -> dict[str, Any]:
     identity = dict(raw or {}) if isinstance(raw, dict) else {}
     return {
+        "app_id": str(identity.get("app_id") or "").strip(),
+        "customer_id": int(identity.get("customer_id") or 0),
+        "respondent_identity_id": int(identity.get("respondent_identity_id") or 0),
         "external_userid": str(identity.get("external_userid") or "").strip(),
         "follow_user_userid": str(identity.get("follow_user_userid") or identity.get("owner_userid") or "").strip(),
         "openid": str(identity.get("openid") or "").strip(),
@@ -752,7 +760,7 @@ def _plan_questionnaire_tag_side_effect(
     final_tags: list[str],
 ) -> dict[str, Any]:
     external_userid = str(submission.get("external_userid") or "").strip()
-    unionid = str(submission.get("unionid") or "").strip()
+    customer_id = int(submission.get("customer_id") or 0)
     follow_user_userid = str(submission.get("follow_user_userid") or "").strip()
     tag_ids = list(dict.fromkeys(str(tag_id or "").strip() for tag_id in final_tags if str(tag_id or "").strip()))
     base = {
@@ -802,11 +810,13 @@ def _plan_questionnaire_tag_side_effect(
     return {
         **base,
         "status": "queued",
-        "error_code": "identity_pending_unionid" if not unionid else "",
+        "error_code": "identity_pending" if not (customer_id and external_userid and follow_user_userid) else "",
         "error_message": "",
-        "reason": "durable_internal_event_waiting_for_unionid" if not unionid else "durable_internal_event_queued",
+        "reason": "durable_internal_event_waiting_for_identity"
+        if not (customer_id and external_userid and follow_user_userid)
+        else "durable_internal_event_queued",
         "retryable": True,
-        "identity_pending": not bool(unionid and external_userid and follow_user_userid),
+        "identity_pending": not bool(customer_id and external_userid and follow_user_userid),
         "skipped": False,
     }
 

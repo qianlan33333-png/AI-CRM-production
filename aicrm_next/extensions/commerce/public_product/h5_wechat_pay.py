@@ -24,15 +24,9 @@ from aicrm_next.platform.navigation_target import (
 )
 from aicrm_next.extensions.commerce.commerce.order_expiration import close_expired_wechat_pay_orders, pending_order_expires_at_text
 from aicrm_next.platform.shared.product_code_aliases import product_code_filter_values
-from aicrm_next.crm.identity_contact.dto import IdentityResolveResult, ResolvePersonIdentityRequest
-from aicrm_next.crm.identity_contact.application import ResolvePersonIdentityQuery
 from aicrm_next.crm.identity_contact.payment_projection import project_payment_order_mobile
-from aicrm_next.crm.identity_contact.oauth_projection_repo import project_wechat_oauth_identity
-from aicrm_next.crm.identity_contact.resolver import resolve_identity_with_dbapi, resolved_unionid
-from aicrm_next.crm.identity_contact.wechat_unionid_guard import (
-    evaluate_wechat_unionid_access,
-    resolve_oauth_unionid,
-)
+from aicrm_next.crm.identity_contact.oneid_repository import PostgresOneIDService
+from aicrm_next.platform.shared.postgres_connection import PostgresConnection
 from aicrm_next.integration_ports import WeChatPayClient, WeChatPayClientConfig, WeChatPayClientError
 from aicrm_next.integration_ports import WeChatOAuthClientError, build_wechat_oauth_client
 from aicrm_next.platform.platform_foundation.internal_events.outbox import enqueue_transactional_internal_event_outbox
@@ -77,7 +71,25 @@ _OAUTH_STATE_CLOCK_SKEW_SECONDS = 300
 _OAUTH_STATE_PATTERN = re.compile(r"^[a-f0-9]{48}$")
 LOGGER = logging.getLogger(__name__)
 _OAUTH_CLIENT_FACTORY = build_wechat_oauth_client
-RUNTIME_SETTING_KEYS = frozenset({"WECHAT_MP_APP_ID", "WECHAT_MP_APP_SECRET", "WECHAT_PAY_API_BASE", "WECHAT_PAY_API_V3_KEY", "WECHAT_PAY_APP_ID", "WECHAT_PAY_CERT_SERIAL_NO", "WECHAT_PAY_ENABLED", "WECHAT_PAY_MCH_ID", "WECHAT_PAY_NOTIFY_URL", "WECHAT_PAY_OAUTH_SCOPE", "WECHAT_PAY_PLATFORM_CERT_SERIAL_NO", "WECHAT_PAY_PLATFORM_PUBLIC_KEY_PATH", "WECHAT_PAY_PRIVATE_KEY_PATH", "WECHAT_PAY_TIMEOUT_SECONDS"})
+RUNTIME_SETTING_KEYS = frozenset(
+    {
+        "WECHAT_MP_APP_ID",
+        "WECHAT_MP_APP_SECRET",
+        "WECHAT_PAY_API_BASE",
+        "WECHAT_PAY_API_V3_KEY",
+        "WECHAT_PAY_APP_ID",
+        "WECHAT_PAY_APP_SECRET",
+        "WECHAT_PAY_CERT_SERIAL_NO",
+        "WECHAT_PAY_ENABLED",
+        "WECHAT_PAY_MCH_ID",
+        "WECHAT_PAY_NOTIFY_URL",
+        "WECHAT_PAY_OAUTH_SCOPE",
+        "WECHAT_PAY_PLATFORM_CERT_SERIAL_NO",
+        "WECHAT_PAY_PLATFORM_PUBLIC_KEY_PATH",
+        "WECHAT_PAY_PRIVATE_KEY_PATH",
+        "WECHAT_PAY_TIMEOUT_SECONDS",
+    }
+)
 
 
 def _normalized_text(value: Any) -> str:
@@ -133,14 +145,7 @@ def _external_base_url(request: Request) -> str:
     )
     candidate = configured or str(request.base_url).rstrip("/")
     parsed = urlsplit(candidate)
-    if (
-        parsed.scheme not in {"http", "https"}
-        or not parsed.netloc
-        or parsed.username
-        or parsed.password
-        or parsed.query
-        or parsed.fragment
-    ):
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc or parsed.username or parsed.password or parsed.query or parsed.fragment:
         raise RuntimeError("public_base_url_invalid")
     if production_environment() and not configured:
         raise RuntimeError("public_base_url_required")
@@ -150,11 +155,19 @@ def _external_base_url(request: Request) -> str:
 
 
 def _oauth_configured() -> bool:
-    return bool(
-        _env("WECHAT_MP_APP_ID")
-        and _sensitive_setting("WECHAT_MP_APP_SECRET")
-        and payment_session_signing_available()
-    )
+    return bool(_payment_oauth_app_id() and _payment_oauth_app_secret() and payment_session_signing_available())
+
+
+def _payment_oauth_app_id() -> str:
+    return _env("WECHAT_PAY_APP_ID") or _env("WECHAT_MP_APP_ID")
+
+
+def _payment_oauth_app_secret() -> str:
+    pay_app_id = _env("WECHAT_PAY_APP_ID")
+    mp_app_id = _env("WECHAT_MP_APP_ID")
+    if pay_app_id and pay_app_id != mp_app_id:
+        return _sensitive_setting("WECHAT_PAY_APP_SECRET")
+    return _sensitive_setting("WECHAT_PAY_APP_SECRET") or _sensitive_setting("WECHAT_MP_APP_SECRET")
 
 
 def _wechat_oauth_scope() -> str:
@@ -181,7 +194,7 @@ payment_oauth_start_url = shared_payment_oauth_start_url
 
 def payment_oauth_start(request: Request) -> RedirectResponse | JSONResponse:
     return_url = safe_local_return_url(request.query_params.get("return_url") or "/")
-    if _identity_from_request(request).get("unionid"):
+    if _identity_from_request(request).get("openid"):
         return RedirectResponse(return_url, status_code=302, headers=route_headers())
     if not _oauth_configured():
         return JSONResponse({"ok": False, "error": "wechat_pay_oauth_not_configured"}, status_code=501, headers=route_headers())
@@ -204,7 +217,7 @@ def payment_oauth_start(request: Request) -> RedirectResponse | JSONResponse:
         }
     )
     authorize_url = wechat_oauth_authorize_url(
-        app_id=_env("WECHAT_MP_APP_ID"),
+        app_id=_payment_oauth_app_id(),
         redirect_uri=f"{public_base_url}/api/h5/wechat-pay/oauth/callback",
         scope=_wechat_oauth_scope(),
         state=nonce,
@@ -267,39 +280,24 @@ def payment_oauth_callback(request: Request) -> Response:
         issued_at = int(state_payload.get("iat"))
         expires_at = int(state_payload.get("exp"))
     except (TypeError, ValueError):
-        return attributed_response(
-            JSONResponse({"ok": False, "error": "state_invalid"}, status_code=400, headers=route_headers())
-        )
+        return attributed_response(JSONResponse({"ok": False, "error": "state_invalid"}, status_code=400, headers=route_headers()))
     now = int(datetime.now(timezone.utc).timestamp())
-    if (
-        issued_at <= 0
-        or issued_at > now + _OAUTH_STATE_CLOCK_SKEW_SECONDS
-        or expires_at <= issued_at
-        or expires_at - issued_at > STATE_TTL_SECONDS
-    ):
-        return attributed_response(
-            JSONResponse({"ok": False, "error": "state_invalid"}, status_code=400, headers=route_headers())
-        )
+    if issued_at <= 0 or issued_at > now + _OAUTH_STATE_CLOCK_SKEW_SECONDS or expires_at <= issued_at or expires_at - issued_at > STATE_TTL_SECONDS:
+        return attributed_response(JSONResponse({"ok": False, "error": "state_invalid"}, status_code=400, headers=route_headers()))
     if expires_at <= now:
-        return attributed_response(
-            JSONResponse({"ok": False, "error": "state_expired"}, status_code=400, headers=route_headers())
-        )
+        return attributed_response(JSONResponse({"ok": False, "error": "state_expired"}, status_code=400, headers=route_headers()))
     code = _normalized_text(request.query_params.get("code"))
     if not code:
-        return attributed_response(
-            JSONResponse({"ok": False, "error": "code_required"}, status_code=400, headers=route_headers())
-        )
+        return attributed_response(JSONResponse({"ok": False, "error": "code_required"}, status_code=400, headers=route_headers()))
     try:
         client = _oauth_client()
         oauth_payload = client.exchange_code(
-            app_id=_env("WECHAT_MP_APP_ID"),
-            app_secret=_sensitive_setting("WECHAT_MP_APP_SECRET"),
+            app_id=_payment_oauth_app_id(),
+            app_secret=_payment_oauth_app_secret(),
             code=code,
         )
     except (WeChatOAuthClientError, Exception):
-        return attributed_response(
-            JSONResponse({"ok": False, "error": "wechat_oauth_failed"}, status_code=502, headers=route_headers())
-        )
+        return attributed_response(JSONResponse({"ok": False, "error": "wechat_oauth_failed"}, status_code=502, headers=route_headers()))
     if oauth_payload.get("errcode") not in (None, 0):
         return attributed_response(
             JSONResponse(
@@ -328,28 +326,24 @@ def payment_oauth_callback(request: Request) -> Response:
                 payer_name = _normalized_text(userinfo.get("nickname"))
         except (WeChatOAuthClientError, Exception):
             payer_name = ""
+    customer_id = 0
+    payer_identity_id = 0
     if production_data_ready():
         try:
             with _connect() as conn:
-                projection = project_wechat_oauth_identity(
-                    conn,
+                resolution = PostgresOneIDService().ensure_verified_wechat_identity_with_db(
+                    PostgresConnection(conn),
+                    app_id=_payment_oauth_app_id(),
                     openid=openid,
                     unionid=unionid,
-                    payer_name=payer_name,
-                    source_route="/api/h5/wechat-pay/oauth/callback",
+                    source_type="wechat_oauth",
+                    source_event_id=code,
                 )
-                if not projection.get("ok"):
-                    # Conflict projection writes only a redacted audit record;
-                    # keep that evidence while refusing to issue a session.
+                if resolution.get("status") == "conflict":
                     conn.commit()
-                    return identity_failure(
-                        message=(
-                            "当前微信身份存在冲突，请联系工作人员处理。"
-                            if projection.get("reason") != "unionid_required"
-                            else "微信未返回 UnionID，暂时无法继续，请确认授权后重试。"
-                        )
-                    )
-                unionid = _normalized_text(projection.get("unionid"))
+                    return identity_failure(message="当前微信身份存在冲突，请联系工作人员处理。")
+                customer_id = int(resolution.get("customer_id") or 0)
+                payer_identity_id = int(resolution.get("openid_identity_id") or resolution.get("identity_id") or 0)
                 conn.commit()
         except Exception as exc:
             safe_log_exception(LOGGER, "wechat_pay_oauth_identity_projection_failed", exc)
@@ -360,14 +354,6 @@ def payment_oauth_callback(request: Request) -> Response:
                     headers=route_headers(),
                 )
             )
-    unionid = resolve_oauth_unionid(
-        {"openid": openid, "unionid": unionid},
-        identity_query=ResolvePersonIdentityQuery(),
-    )
-    if not unionid:
-        return identity_failure(
-            message="微信未返回 UnionID，暂时无法继续，请确认授权后重试。"
-        )
     response = RedirectResponse(return_url, status_code=302, headers=route_headers())
     issued_at = int(datetime.now(timezone.utc).timestamp())
     response.set_cookie(
@@ -375,6 +361,9 @@ def payment_oauth_callback(request: Request) -> Response:
         _signed_blob(
             {
                 "openid": openid,
+                "app_id": _payment_oauth_app_id(),
+                "customer_id": customer_id,
+                "payer_identity_id": payer_identity_id,
                 "unionid": unionid,
                 "payer_name": payer_name,
                 "iat": issued_at,
@@ -395,12 +384,9 @@ def checkout_page_state(product: dict[str, Any], request: Request) -> dict[str, 
 
     identity = _identity_from_request(request)
     code = _normalized_text(product.get("product_code"))
-    access = evaluate_wechat_unionid_access(
-        identity,
-        is_wechat_browser=_is_wechat_browser(request),
-        oauth_start_url=payment_oauth_start_url(f"/pay/{code}"),
-    )
-    paid_order = _existing_paid_order_for_checkout(product, identity) if access.allowed else None
+    browser_ready = _is_wechat_browser(request)
+    identity_ready = browser_ready and bool(_normalized_text(identity.get("openid")))
+    paid_order = _existing_paid_order_for_checkout(product, identity) if identity_ready else None
     context_token = _normalized_text(request.cookies.get(SIDEBAR_PRODUCT_CONTEXT_COOKIE))
     context_result = load_sidebar_product_context_token(context_token)
     pay_path = f"/pay/{code}"
@@ -413,9 +399,9 @@ def checkout_page_state(product: dict[str, Any], request: Request) -> dict[str, 
             "amount_total": int(product.get("price_cents") or product.get("amount_total") or 0),
             "currency": _normalized_text(product.get("currency")) or "CNY",
         },
-        "identity_ready": access.allowed,
-        "identity_error": access.error,
-        "identity_message": access.message,
+        "identity_ready": identity_ready,
+        "identity_error": "" if identity_ready else "wechat_oauth_required",
+        "identity_message": "" if identity_ready else "请在微信中完成授权后继续。",
         "is_wechat_browser": _is_wechat_browser(request),
         "oauth_start_url": payment_oauth_start_url(pay_path),
         "create_order_url": "/api/h5/wechat-pay/jsapi/orders",
@@ -429,11 +415,7 @@ def checkout_page_state(product: dict[str, Any], request: Request) -> dict[str, 
         "price_display": format_price(product),
         "context_status": _normalized_text(context_result.get("status")) or "missing",
         "coupon_target_ref": coupon_target_ref,
-        "available_coupon_url": (
-            f"/api/h5/coupons/available?{urlencode({'target_ref': coupon_target_ref})}"
-            if coupon_target_ref
-            else ""
-        ),
+        "available_coupon_url": (f"/api/h5/coupons/available?{urlencode({'target_ref': coupon_target_ref})}" if coupon_target_ref else ""),
     }
 
 
@@ -518,9 +500,7 @@ def _safe_success_url(value: Any) -> str:
 def _is_order_fully_refunded(row: dict[str, Any]) -> bool:
     amount_total = int(row.get("amount_total") or 0)
     refunded_amount_total = int(row.get("refunded_amount_total") or 0)
-    return _normalized_text(row.get("refund_status")) == "full_refunded" or (
-        amount_total > 0 and refunded_amount_total >= amount_total
-    )
+    return _normalized_text(row.get("refund_status")) == "full_refunded" or (amount_total > 0 and refunded_amount_total >= amount_total)
 
 
 def _is_order_effectively_paid(row: dict[str, Any]) -> bool:
@@ -695,53 +675,45 @@ def resolve_product_lead_qr(product: dict[str, Any]) -> dict[str, Any]:
         return {}
 
 
-def _resolve_payment_identity(
-    conn: Any,
-    identity: dict[str, str],
-    *,
-    for_update: bool = False,
-) -> IdentityResolveResult:
-    """Resolve only payer-owned aliases; sidebar customer context is not payer identity."""
-
-    unionid = _normalized_text(identity.get("unionid"))
+def _resolve_payment_oneid(conn: Any, identity: dict[str, str]) -> dict[str, Any]:
+    app_id = _normalized_text(identity.get("app_id"))
     openid = _normalized_text(identity.get("openid"))
-    if not unionid:
-        return resolve_identity_with_dbapi(
-            conn,
-            ResolvePersonIdentityRequest(openid=openid or None),
-            for_update=for_update,
-        )
-
-    unionid_result = resolve_identity_with_dbapi(
-        conn,
-        ResolvePersonIdentityRequest(unionid=unionid),
-        for_update=for_update,
+    if not app_id or not openid or app_id != _payment_oauth_app_id():
+        return {"status": "invalid"}
+    return PostgresOneIDService().ensure_verified_wechat_identity_with_db(
+        PostgresConnection(conn),
+        app_id=app_id,
+        openid=openid,
+        unionid=_normalized_text(identity.get("unionid")),
+        source_type="wechat_oauth_session",
     )
-    if unionid_result.status != "resolved" or not openid:
-        return unionid_result
 
-    # OAuth can return a valid unionid before the public-account openid alias has
-    # been projected into crm_user_identity.  A missing/pending openid must not
-    # block that canonical unionid, but an openid that resolves elsewhere still
-    # represents a real payer-identity conflict and remains blocked.
-    openid_result = resolve_identity_with_dbapi(
-        conn,
-        ResolvePersonIdentityRequest(openid=openid),
-        for_update=for_update,
-    )
-    if openid_result.status == "conflict":
-        return openid_result
-    canonical_unionid = resolved_unionid(unionid_result)
-    openid_unionid = resolved_unionid(openid_result)
-    if openid_unionid and openid_unionid != canonical_unionid:
-        return IdentityResolveResult(
-            status="conflict",
-            reason="identity_inputs_disagree",
-            matched_fields=["unionid", "openid"],
-            candidate_count=2,
-            pending_count=max(0, int(openid_result.pending_count)),
-        )
-    return unionid_result
+
+def _sidebar_recipient_customer_id(conn: Any, context: dict[str, Any]) -> int:
+    corp_id = _env("WECOM_CORP_ID")
+    external_userid = _normalized_text(context.get("external_userid"))
+    owner_userid = _normalized_text(context.get("owner_userid"))
+    if not corp_id or not external_userid or not owner_userid:
+        return 0
+    row = conn.execute(
+        """
+        SELECT aicrm_customer_root_id(identity.customer_id) AS customer_id
+        FROM customer_identities identity
+        JOIN wecom_external_contact_follow_users relation
+          ON relation.corp_id = identity.scope_key
+         AND relation.external_userid = identity.normalized_value
+         AND relation.user_id = %s
+         AND relation.relation_status = 'active'
+        WHERE identity.provider = 'wecom'
+          AND identity.identity_type = 'external_userid'
+          AND identity.scope_key = %s
+          AND identity.normalized_value = %s
+          AND identity.status = 'active'
+        LIMIT 1
+        """,
+        (owner_userid, corp_id, external_userid),
+    ).fetchone()
+    return int((row or {}).get("customer_id") or 0)
 
 
 def _paid_order_for_product_identity(
@@ -749,13 +721,13 @@ def _paid_order_for_product_identity(
     *,
     product: dict[str, Any],
     identity: dict[str, str],
-    canonical_unionid: str = "",
+    payer_identity_id: int = 0,
 ) -> dict[str, Any] | None:
     product_codes = product_code_filter_values(product.get("product_code"))
-    unionid = _normalized_text(canonical_unionid) or resolved_unionid(_resolve_payment_identity(conn, identity))
-    if not product_codes or not unionid:
+    identity_id = int(payer_identity_id or 0)
+    if not product_codes or not identity_id:
         return None
-    params: list[Any] = [*product_codes, unionid]
+    params: list[Any] = [*product_codes, identity_id]
     product_placeholders = ", ".join(["%s"] * len(product_codes))
     row = conn.execute(
         f"""
@@ -767,7 +739,7 @@ def _paid_order_for_product_identity(
             COALESCE(refund_status, '') = 'full_refunded'
             OR (amount_total > 0 AND COALESCE(refunded_amount_total, 0) >= amount_total)
           )
-          AND unionid = %s
+          AND payer_identity_id = %s
         ORDER BY paid_at DESC NULLS LAST, updated_at DESC NULLS LAST, created_at DESC NULLS LAST, id DESC
         LIMIT 1
         """,
@@ -781,13 +753,13 @@ def _paid_order_payload_for_product_identity(
     *,
     product: dict[str, Any],
     identity: dict[str, str],
-    canonical_unionid: str = "",
+    payer_identity_id: int = 0,
 ) -> dict[str, Any] | None:
     order = _paid_order_for_product_identity(
         conn,
         product=product,
         identity=identity,
-        canonical_unionid=canonical_unionid,
+        payer_identity_id=payer_identity_id,
     )
     if not order:
         return None
@@ -801,7 +773,7 @@ def _active_order_for_client_reference(
     *,
     order_source: str,
     client_order_ref: str,
-    canonical_unionid: str,
+    payer_identity_id: int,
     product_code: str,
 ) -> dict[str, Any] | None:
     """Serialize retries for one browser checkout and return its active order."""
@@ -812,7 +784,7 @@ def _active_order_for_client_reference(
     lock_key = "|".join(
         (
             _normalized_text(order_source) or "h5_checkout",
-            _normalized_text(canonical_unionid),
+            str(int(payer_identity_id)),
             _normalized_text(product_code),
             reference,
         )
@@ -824,7 +796,7 @@ def _active_order_for_client_reference(
         FROM wechat_pay_orders
         WHERE order_source = %s
           AND client_order_ref = %s
-          AND unionid = %s
+          AND payer_identity_id = %s
           AND product_code = %s
           AND COALESCE(status, '') NOT IN ('failed', 'closed')
           AND COALESCE(trade_state, '') NOT IN ('CLOSED', 'REVOKED')
@@ -835,7 +807,7 @@ def _active_order_for_client_reference(
         (
             _normalized_text(order_source) or "h5_checkout",
             reference,
-            _normalized_text(canonical_unionid),
+            int(payer_identity_id),
             _normalized_text(product_code),
         ),
     ).fetchone()
@@ -847,7 +819,16 @@ def _existing_paid_order_for_checkout(product: dict[str, Any], identity: dict[st
         return None
     try:
         with _connect() as conn:
-            return _paid_order_payload_for_product_identity(conn, product=product, identity=identity)
+            resolution = _resolve_payment_oneid(conn, identity)
+            if resolution.get("status") != "resolved":
+                return None
+            conn.commit()
+            return _paid_order_payload_for_product_identity(
+                conn,
+                product=product,
+                identity=identity,
+                payer_identity_id=int(resolution.get("openid_identity_id") or resolution.get("identity_id") or 0),
+            )
     except Exception:
         return None
 
@@ -865,7 +846,11 @@ def _order_payload(
     completion = dict(effective_completion.get("completion_redirect") or {})
     completion_url = safe_completion_redirect_url(completion.get("url") or effective_completion.get("completion_redirect_url"))
     completion_enabled = bool(completion.get("enabled")) and bool(completion_url)
-    completion_target = (effective_completion.get("completion_target") or effective_completion.get("completion_target_json") or {}) if isinstance(effective_completion, dict) else {}
+    completion_target = (
+        (effective_completion.get("completion_target") or effective_completion.get("completion_target_json") or {})
+        if isinstance(effective_completion, dict)
+        else {}
+    )
     completion_action = completion_action_with_lead_qr(
         completion_target if isinstance(completion_target, dict) else {},
         lead_qr=lead_qr if _is_order_effectively_paid(row) else None,
@@ -924,6 +909,8 @@ def _insert_order(
             description=product.get("description") or product["title"],
             amount_total=int(product.get("price_cents") or 0),
             currency=product.get("currency") or "CNY",
+            customer_id=int(identity.get("customer_id") or 0),
+            payer_identity_id=int(identity.get("payer_identity_id") or 0),
             unionid=identity.get("unionid") or "",
             payer_name_snapshot=identity.get("payer_name") or "",
             success_url=_safe_success_url(product.get("completion_redirect_url")),
@@ -946,7 +933,9 @@ def _insert_order(
     )
 
 
-def _update_payment_request(conn: Any, out_trade_no: str, *, prepay_id: str, request_payload: dict[str, Any], response_payload: dict[str, Any]) -> dict[str, Any]:
+def _update_payment_request(
+    conn: Any, out_trade_no: str, *, prepay_id: str, request_payload: dict[str, Any], response_payload: dict[str, Any]
+) -> dict[str, Any]:
     return build_wechat_pay_order_write_port().update_payment_request_dbapi(
         conn,
         out_trade_no=out_trade_no,
@@ -1024,6 +1013,25 @@ def _apply_transaction(conn: Any, transaction: dict[str, Any], *, source_route: 
     amount = transaction.get("amount") if isinstance(transaction.get("amount"), dict) else {}
     previous = conn.execute("SELECT * FROM wechat_pay_orders WHERE out_trade_no = %s LIMIT 1 FOR UPDATE", (trade_no,)).fetchone()
     previous_payload = dict(previous or {})
+    if not previous_payload:
+        raise RuntimeError("wechat_pay_order_not_found")
+    transaction_app_id = _normalized_text(transaction.get("appid"))
+    if transaction_app_id != _client_config().app_id:
+        raise RuntimeError("wechat_pay_appid_mismatch")
+    payer = transaction.get("payer") if isinstance(transaction.get("payer"), dict) else {}
+    payer_openid = _normalized_text(payer.get("openid"))
+    if not payer_openid:
+        raise RuntimeError("wechat_pay_payer_openid_missing")
+    payer_resolution = PostgresOneIDService().ensure_verified_wechat_identity_with_db(
+        PostgresConnection(conn),
+        app_id=transaction_app_id,
+        openid=payer_openid,
+        source_type="wechat_pay_transaction",
+        source_event_id=_normalized_text(transaction.get("transaction_id")),
+    )
+    callback_identity_id = int(payer_resolution.get("openid_identity_id") or payer_resolution.get("identity_id") or 0)
+    if callback_identity_id != int(previous_payload.get("payer_identity_id") or 0):
+        raise RuntimeError("wechat_pay_payer_identity_mismatch")
     if trade_state == "SUCCESS":
         _assert_transaction_amount(previous_payload, transaction)
     was_paid = _normalized_text((previous or {}).get("status")) == "paid" or _normalized_text((previous or {}).get("trade_state")) == "SUCCESS"
@@ -1110,15 +1118,14 @@ def create_jsapi_order_response(
         product = dict(product_override)
         product_code = _normalized_text(product.get("product_code") or product_code)
     identity = _identity_from_request(request)
-    access = evaluate_wechat_unionid_access(
-        identity,
-        is_wechat_browser=True,
-        oauth_start_url=payment_oauth_start_url(checkout_return_path or f"/pay/{product_code}"),
-    )
-    if not access.allowed:
+    if not _normalized_text(identity.get("openid")):
         return JSONResponse(
-            access.payload(),
-            status_code=access.status_code,
+            {
+                "ok": False,
+                "error": "wechat_oauth_required",
+                "oauth_start_url": payment_oauth_start_url(checkout_return_path or f"/pay/{product_code}"),
+            },
+            status_code=401,
             headers=route_headers(),
         )
     try:
@@ -1166,31 +1173,41 @@ def create_jsapi_order_response(
     order_persisted = False
     provider_invoked = False
     canonical_unionid = ""
+    payer_identity_id = 0
     try:
         # Phase 1: order creation and coupon reservation are one local
         # transaction.  It commits before any external payment request.
         with _connect() as conn:
-            identity_resolution = _resolve_payment_identity(conn, identity, for_update=True)
-            canonical_unionid = resolved_unionid(identity_resolution)
-            if not canonical_unionid:
-                conflict = identity_resolution.status == "conflict"
+            oneid_resolution = _resolve_payment_oneid(conn, identity)
+            if oneid_resolution.get("status") != "resolved":
+                conflict = oneid_resolution.get("status") == "conflict"
                 return JSONResponse(
                     {
                         "ok": False,
                         "error": "identity_conflict" if conflict else "identity_resolution_required",
-                        "identity_status": identity_resolution.status,
+                        "identity_status": oneid_resolution.get("status"),
                         "retryable": not conflict,
                     },
                     status_code=409,
                     headers=route_headers(),
                 )
-            order_identity["unionid"] = canonical_unionid
+            payer_identity_id = int(oneid_resolution.get("openid_identity_id") or oneid_resolution.get("identity_id") or 0)
+            payer_customer_id = int(oneid_resolution.get("customer_id") or 0)
+            canonical_unionid = _normalized_text(identity.get("unionid"))
+            recipient_customer_id = _sidebar_recipient_customer_id(conn, resolved_context) or payer_customer_id
+            order_identity.update(
+                {
+                    "customer_id": recipient_customer_id,
+                    "payer_identity_id": payer_identity_id,
+                    "unionid": canonical_unionid,
+                }
+            )
             existing_paid_order = (
                 _paid_order_payload_for_product_identity(
                     conn,
                     product=product,
                     identity=identity,
-                    canonical_unionid=canonical_unionid,
+                    payer_identity_id=payer_identity_id,
                 )
                 if allow_paid_reuse
                 else None
@@ -1201,7 +1218,7 @@ def create_jsapi_order_response(
                 conn,
                 order_source=order_source,
                 client_order_ref=client_order_ref,
-                canonical_unionid=canonical_unionid,
+                payer_identity_id=payer_identity_id,
                 product_code=product_code,
             )
             if existing_client_order is not None:
@@ -1328,20 +1345,14 @@ def create_jsapi_order_response(
                 "error": "coupon_unavailable",
                 "message": str(exc),
                 "available_coupons": latest_available,
-                "available_coupon_url": (
-                    "/api/h5/coupons/available?"
-                    + urlencode({"target_ref": target_ref})
-                ),
+                "available_coupon_url": ("/api/h5/coupons/available?" + urlencode({"target_ref": target_ref})),
             },
             status_code=409,
             headers=route_headers(),
         )
     except Exception as exc:
         definitive_provider_failure = (
-            isinstance(exc, WeChatPayClientError)
-            and exc.status_code is not None
-            and 400 <= int(exc.status_code) < 500
-            and int(exc.status_code) != 429
+            isinstance(exc, WeChatPayClientError) and exc.status_code is not None and 400 <= int(exc.status_code) < 500 and int(exc.status_code) != 429
         )
         if order_persisted:
             try:
@@ -1380,21 +1391,20 @@ def order_status_response(out_trade_no: str, request: Request) -> JSONResponse:
         return JSONResponse({"ok": False, "error": "production_database_required"}, status_code=503, headers=route_headers())
     trade_no = _normalized_text(out_trade_no)
     identity = _identity_from_request(request)
-    access = evaluate_wechat_unionid_access(
-        identity,
-        is_wechat_browser=_is_wechat_browser(request),
-        oauth_start_url=payment_oauth_start_url(f"/api/h5/wechat-pay/orders/{trade_no}"),
-    )
-    if not access.allowed:
+    if not _is_wechat_browser(request) or not _normalized_text(identity.get("openid")):
         return JSONResponse(
-            access.payload(),
-            status_code=access.status_code,
+            {
+                "ok": False,
+                "error": "wechat_oauth_required",
+                "oauth_start_url": payment_oauth_start_url(f"/api/h5/wechat-pay/orders/{trade_no}"),
+            },
+            status_code=401,
             headers=route_headers(),
         )
     with _connect() as conn:
-        identity_result = _resolve_payment_identity(conn, identity)
-        canonical_unionid = resolved_unionid(identity_result)
-        if not canonical_unionid:
+        identity_result = _resolve_payment_oneid(conn, identity)
+        payer_identity_id = int(identity_result.get("openid_identity_id") or identity_result.get("identity_id") or 0)
+        if identity_result.get("status") != "resolved" or not payer_identity_id:
             return JSONResponse(
                 {"ok": False, "error": "payment_identity_unresolved"},
                 status_code=403,
@@ -1404,7 +1414,7 @@ def order_status_response(out_trade_no: str, request: Request) -> JSONResponse:
             "SELECT * FROM wechat_pay_orders WHERE out_trade_no = %s LIMIT 1 FOR UPDATE",
             (trade_no,),
         ).fetchone()
-        if not locked_order or _normalized_text(locked_order.get("unionid")) != canonical_unionid:
+        if not locked_order or int(locked_order.get("payer_identity_id") or 0) != payer_identity_id:
             conn.rollback()
             return JSONResponse({"ok": False, "error": "order_not_found"}, status_code=404, headers=route_headers())
         close_expired_wechat_pay_orders(conn=conn, out_trade_no=trade_no, limit=1)

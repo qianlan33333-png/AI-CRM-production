@@ -241,11 +241,27 @@ def _project_postgres(
                 )
             )
         )
-        if not effective_unionid:
+        customer_row = connection.execute(
+            text(
+                """
+                SELECT COALESCE(root.id, customer.id) AS customer_id
+                FROM wecom_external_contact_identity_map identity_map
+                JOIN customers customer ON customer.id = identity_map.customer_id
+                LEFT JOIN customers root ON root.id = customer.merged_into_customer_id
+                WHERE identity_map.external_userid = :external_userid
+                  AND identity_map.status = 'active'
+                ORDER BY identity_map.updated_at DESC, identity_map.id DESC
+                LIMIT 1
+                """
+            ),
+            {"external_userid": external_userid},
+        ).mappings().fetchone()
+        customer_id = int((customer_row or {}).get("customer_id") or 0)
+        if not effective_unionid and customer_id <= 0:
             return _projection_result(
                 local_projection_updated=False,
                 skipped=True,
-                reason="unionid_missing",
+                reason="identity_missing",
                 unionid="",
                 external_userid=external_userid,
                 owner_userid=owner_userid,
@@ -270,7 +286,7 @@ def _project_postgres(
                         submission_id = :submission_id,
                         idempotency_key = :idempotency_key,
                         updated_at = CURRENT_TIMESTAMP
-                    WHERE unionid = :unionid
+                    WHERE (customer_id = :customer_id OR (:customer_id = 0 AND unionid = :unionid))
                       AND userid = :userid
                       AND tag_id = :tag_id
                     """
@@ -282,6 +298,7 @@ def _project_postgres(
                     "submission_id": _text(submission_id),
                     "idempotency_key": idempotency_key,
                     "unionid": effective_unionid,
+                    "customer_id": customer_id,
                     "userid": owner_userid,
                     "tag_id": tag_id,
                 },
@@ -293,12 +310,12 @@ def _project_postgres(
                 text(
                     """
                     INSERT INTO contact_tags (
-                        unionid, userid, tag_id, tag_name, source,
+                        customer_id, unionid, userid, tag_id, tag_name, source,
                         questionnaire_id, submission_id, idempotency_key,
                         created_at, updated_at
                     )
                     VALUES (
-                        :unionid, :userid, :tag_id, :tag_name, :source,
+                        NULLIF(:customer_id, 0), :unionid, :userid, :tag_id, :tag_name, :source,
                         :questionnaire_id, :submission_id, :idempotency_key,
                         CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
                     )
@@ -306,6 +323,7 @@ def _project_postgres(
                 ),
                 {
                     "unionid": effective_unionid,
+                    "customer_id": customer_id,
                     "userid": owner_userid,
                     "tag_id": tag_id,
                     "tag_name": tag_names.get(tag_id) or tag_id,

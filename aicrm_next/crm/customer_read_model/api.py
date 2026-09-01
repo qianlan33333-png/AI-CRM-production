@@ -15,8 +15,9 @@ from aicrm_next.platform.shared.resource_admission import (
     media_binary_admission,
 )
 from aicrm_next.platform.shared.runtime import database_mode, production_data_ready
-from aicrm_next.platform.shared.runtime_settings import startup_environment_setting
-from aicrm_next.platform.shared.sidebar_access import sidebar_owner_context_from_request as _sidebar_owner_context_from_request
+from aicrm_next.platform.shared.runtime_settings import managed_runtime_setting, startup_environment_setting
+from aicrm_next.platform.shared.sidebar_access import sidebar_owner_context_from_request as _signed_sidebar_owner_context_from_request
+from aicrm_next.crm.identity_contact.repo import FixtureIdentityRepository, PostgresIdentityRepository
 from . import application as customer_application
 from .extension_port import UpdateServicePeriodMemberRemarkCommand, generate_missing_image_variants
 from .application import (
@@ -52,6 +53,18 @@ from .sidebar_timeline import ResolvedSidebarCustomerContext, SidebarCustomerTim
 
 router = APIRouter()
 _SQL_REPO_BACKENDS = {"sql", "sqlalchemy", "postgres", "postgresql"}
+
+
+def _sidebar_owner_context_from_request(request: Request, **claims: Any) -> dict[str, Any]:
+    context = _signed_sidebar_owner_context_from_request(request, **claims)
+    repository = PostgresIdentityRepository() if database_mode() == "postgres" else FixtureIdentityRepository()
+    if not repository.has_active_follow_relation(
+        corp_id=str(context.get("corp_id") or managed_runtime_setting("WECOM_CORP_ID") or "").strip(),
+        user_id=str(context.get("owner_userid") or "").strip(),
+        external_userid=str(context.get("external_userid") or "").strip(),
+    ):
+        raise HTTPException(status_code=403, detail="sidebar customer scope forbidden")
+    return context
 
 
 def _customer_read_model_sql_backend_enabled() -> bool:

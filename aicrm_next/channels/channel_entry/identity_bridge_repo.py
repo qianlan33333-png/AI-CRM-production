@@ -446,6 +446,22 @@ class PostgresIdentityBridgeRepository:
         )
         row = cursor.fetchone()
         if row:
+            linked = db.execute(
+                """
+                UPDATE crm_user_identity_resolution_queue queue
+                SET customer_id = identity_map.customer_id,
+                    identity_id = identity_map.identity_id,
+                    enrichment_status = 'pending',
+                    updated_at = NOW()
+                FROM wecom_external_contact_identity_map identity_map
+                WHERE queue.id = ?
+                  AND identity_map.corp_id = queue.corp_id
+                  AND identity_map.external_userid = queue.external_userid
+                RETURNING queue.*
+                """,
+                (int(row.get("id") or 0),),
+            ).fetchone()
+            row = linked or row
             plan_identity_resolution_effect(
                 db,
                 dict(row),

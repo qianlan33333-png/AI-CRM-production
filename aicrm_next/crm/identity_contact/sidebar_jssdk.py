@@ -19,7 +19,7 @@ from aicrm_next.integration_ports import (
     WeComAdminAuthClientError,
     build_wecom_admin_auth_client,
 )
-from aicrm_next.platform.shared.runtime import production_environment
+from aicrm_next.platform.shared.runtime import database_mode, production_environment
 from aicrm_next.platform.shared.runtime_settings import managed_runtime_setting, runtime_setting
 from aicrm_next.platform.shared.signed_context import (
     SIDEBAR_VIEWER_SESSION_COOKIE,
@@ -36,6 +36,8 @@ from aicrm_next.platform.shared.signed_session import (
 )
 
 from .sidebar_authorization import build_sidebar_authorization_service
+from .oneid_repository import PostgresOneIDService
+from .resolution_effects import enqueue_sidebar_identity_verification
 
 router = APIRouter()
 DEFAULT_SIDEBAR_JSSDK_ALLOWED_HOSTS = {"youcangogogo.com", "www.youcangogogo.com"}
@@ -154,6 +156,43 @@ async def sidebar_context_token(request: Request) -> Response:
             },
             status_code=403,
         )
+    access = _sidebar_customer_access(
+        corp_id=corp_id,
+        viewer_userid=viewer_userid,
+        external_userid=external_userid,
+    )
+    if access["status"] == "forbidden":
+        return JSONResponse(
+            {
+                "ok": False,
+                "context_status": "forbidden",
+                "error": "sidebar_customer_scope_forbidden",
+                "sidebar_owner_token": "",
+                "sidebar_owner_token_status": "forbidden",
+                "route_owner": "ai_crm_next",
+                "real_external_call_executed": False,
+            },
+            status_code=403,
+        )
+    if access["status"] == "provisioning":
+        return JSONResponse(
+            {
+                "ok": True,
+                "context_status": "provisioning",
+                "sidebar_owner_token": "",
+                "sidebar_owner_token_status": "provisioning",
+                "sync_token": _provisioning_sync_token(
+                    corp_id=corp_id,
+                    viewer_userid=viewer_userid,
+                    external_userid=external_userid,
+                ),
+                "retry_after": 2,
+                "unionid_status": str(access.get("unionid_status") or "pending"),
+                "route_owner": "ai_crm_next",
+                "real_external_call_executed": False,
+            },
+            status_code=202,
+        )
     ttl_seconds = sidebar_owner_context_ttl_seconds()
     token = build_sidebar_owner_context_token(
         viewer_userid=viewer_userid,
@@ -165,6 +204,8 @@ async def sidebar_context_token(request: Request) -> Response:
     return JSONResponse(
         {
             "ok": True,
+            "context_status": "ready",
+            "unionid_status": str(access.get("unionid_status") or "pending"),
             "sidebar_owner_token": token,
             "sidebar_owner_token_status": "issued",
             "sidebar_owner_context": {
@@ -355,6 +396,30 @@ def _with_sidebar_owner_context(request: Request, payload: dict) -> dict:
             external_userid=external_userid,
             source="sidebar_context_token_required",
         )
+    corp_id = str(result.get("corp_id") or result.get("corpId") or viewer_session.get("corp_id") or "").strip()
+    access = _sidebar_customer_access(
+        corp_id=corp_id,
+        viewer_userid=viewer_userid,
+        external_userid=external_userid,
+    )
+    if access["status"] != "ready":
+        result = _without_sidebar_owner_token(
+            request,
+            result,
+            status=access["status"],
+            external_userid=external_userid,
+            source=f"sidebar_{access['status']}",
+        )
+        result["context_status"] = access["status"]
+        if access["status"] == "provisioning":
+            result["sync_token"] = _provisioning_sync_token(
+                corp_id=corp_id,
+                viewer_userid=viewer_userid,
+                external_userid=external_userid,
+            )
+            result["retry_after"] = 2
+            result["unionid_status"] = str(access.get("unionid_status") or "pending")
+        return result
     ttl_seconds = sidebar_owner_context_ttl_seconds()
     result["sidebar_owner_token"] = build_sidebar_owner_context_token(
         viewer_userid=viewer_userid,
@@ -364,6 +429,8 @@ def _with_sidebar_owner_context(request: Request, payload: dict) -> dict:
         ttl_seconds=ttl_seconds,
     )
     result["sidebar_owner_token_status"] = status
+    result["context_status"] = "ready"
+    result["unionid_status"] = str(access.get("unionid_status") or "pending")
     result["sidebar_owner_context"] = {
         "viewer_userid": viewer_userid,
         "owner_userid": viewer_userid,
@@ -374,6 +441,44 @@ def _with_sidebar_owner_context(request: Request, payload: dict) -> dict:
         "source": source,
     }
     return result
+
+
+def _sidebar_customer_access(*, corp_id: str, viewer_userid: str, external_userid: str) -> dict[str, Any]:
+    authorized = build_sidebar_authorization_service().authorize(
+        corp_id=str(corp_id or "").strip(),
+        user_id=str(viewer_userid or "").strip(),
+        external_userid=str(external_userid or "").strip(),
+    )
+    oneid_read_setting = str(managed_runtime_setting("AICRM_ONEID_READ_ENABLED") or "").strip().lower()
+    if oneid_read_setting in {"0", "false", "off", "no"}:
+        return {"status": "ready" if authorized else "forbidden", "unionid_status": "pending"}
+    if database_mode() != "postgres":
+        return {"status": "ready" if authorized else "forbidden", "unionid_status": "pending"}
+    state = PostgresOneIDService().customer_context_state(
+        corp_id=corp_id,
+        owner_userid=viewer_userid,
+        external_userid=external_userid,
+    )
+    if state.get("identity_exists"):
+        return {"status": "ready" if state.get("relation_active") else "forbidden", **state}
+    planned = enqueue_sidebar_identity_verification(
+        corp_id=corp_id,
+        owner_userid=viewer_userid,
+        external_userid=external_userid,
+    )
+    return {"status": "provisioning", "verification": planned}
+
+
+def _provisioning_sync_token(*, corp_id: str, viewer_userid: str, external_userid: str) -> str:
+    return sign_state_payload(
+        {
+            "kind": "sidebar_customer_provisioning",
+            "corp_id": str(corp_id or "").strip(),
+            "viewer_userid": str(viewer_userid or "").strip(),
+            "external_userid": str(external_userid or "").strip(),
+            "nonce": secrets.token_urlsafe(12),
+        }
+    )
 
 
 def _without_sidebar_owner_token(

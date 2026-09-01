@@ -1568,6 +1568,12 @@
       "line": 24
     },
     {
+      "accessor": "managed_runtime_setting",
+      "file": "aicrm_next/crm/identity_contact/sidebar_jssdk.py",
+      "key": "AICRM_ONEID_READ_ENABLED",
+      "line": 452
+    },
+    {
       "accessor": "declared_runtime_setting_key",
       "file": "aicrm_next/channels/integration_gateway/openclaw_mcp_ai_assist_live_adapter.py",
       "key": "AICRM_OPENCLAW_MCP_AI_ASSIST_CONFIG_REVIEWED",
@@ -1949,7 +1955,7 @@
       "accessor": "managed_runtime_setting",
       "file": "aicrm_next/crm/identity_contact/sidebar_jssdk.py",
       "key": "AICRM_SIDEBAR_JSSDK_ALLOWED_HOSTS",
-      "line": 577
+      "line": 682
     },
     {
       "accessor": "declared_runtime_setting_key",
@@ -2931,6 +2937,12 @@
     },
     {
       "accessor": "managed_runtime_setting",
+      "file": "aicrm_next/crm/identity_contact/oneid_repository.py",
+      "key": "WECHAT_OPEN_PLATFORM_SCOPE_ID",
+      "line": 30
+    },
+    {
+      "accessor": "managed_runtime_setting",
       "file": "aicrm_next/channels/integration_gateway/wechat_pay_client.py",
       "key": "WECHAT_PAY_API_BASE",
       "line": 70
@@ -3287,7 +3299,7 @@
       "accessor": "runtime_setting",
       "file": "aicrm_next/channels/channel_entry/application.py",
       "key": "WECOM_CALLBACK_AES_KEY",
-      "line": 63
+      "line": 64
     },
     {
       "accessor": "os.getenv",
@@ -3311,7 +3323,7 @@
       "accessor": "runtime_setting",
       "file": "aicrm_next/channels/channel_entry/application.py",
       "key": "WECOM_CALLBACK_TOKEN",
-      "line": 62
+      "line": 63
     },
     {
       "accessor": "runtime_setting",
@@ -3383,13 +3395,13 @@
       "accessor": "managed_runtime_setting",
       "file": "aicrm_next/channels/channel_entry/application.py",
       "key": "WECOM_CORP_ID",
-      "line": 61
+      "line": 62
     },
     {
       "accessor": "managed_runtime_setting",
       "file": "aicrm_next/channels/channel_entry/identity_bridge_service.py",
       "key": "WECOM_CORP_ID",
-      "line": 18
+      "line": 19
     },
     {
       "accessor": "declared_runtime_setting_key",
@@ -3423,6 +3435,12 @@
     },
     {
       "accessor": "managed_runtime_setting",
+      "file": "aicrm_next/crm/customer_read_model/api.py",
+      "key": "WECOM_CORP_ID",
+      "line": 62
+    },
+    {
+      "accessor": "managed_runtime_setting",
       "file": "aicrm_next/crm/identity_contact/api.py",
       "key": "WECOM_CORP_ID",
       "line": 246
@@ -3437,19 +3455,25 @@
       "accessor": "managed_runtime_setting",
       "file": "aicrm_next/crm/identity_contact/sidebar_jssdk.py",
       "key": "WECOM_CORP_ID",
-      "line": 145
+      "line": 147
     },
     {
       "accessor": "managed_runtime_setting",
       "file": "aicrm_next/crm/identity_contact/sidebar_jssdk.py",
       "key": "WECOM_CORP_ID",
-      "line": 455
+      "line": 560
     },
     {
       "accessor": "managed_runtime_setting",
       "file": "aicrm_next/crm/sidebar_write/api.py",
       "key": "WECOM_CORP_ID",
-      "line": 142
+      "line": 145
+    },
+    {
+      "accessor": "managed_runtime_setting",
+      "file": "aicrm_next/crm/sidebar_write/api.py",
+      "key": "WECOM_CORP_ID",
+      "line": 157
     },
     {
       "accessor": "declared_runtime_setting_key",
@@ -3593,7 +3617,7 @@
       "accessor": "runtime_setting",
       "file": "aicrm_next/crm/identity_contact/sidebar_jssdk.py",
       "key": "WECOM_SECRET",
-      "line": 456
+      "line": 561
     },
     {
       "accessor": "runtime_setting",
@@ -3795,6 +3819,7 @@
     "AICRM_OAUTH_IDENTITY_CONFIG_REVIEWED",
     "AICRM_OAUTH_IDENTITY_LIVE_ADAPTER_ENABLED",
     "AICRM_OAUTH_IDENTITY_LIVE_CALLBACK_APPROVED",
+    "AICRM_ONEID_READ_ENABLED",
     "AICRM_OPENCLAW_MCP_AI_ASSIST_CONFIG_REVIEWED",
     "AICRM_OPENCLAW_MCP_AI_ASSIST_CREDENTIAL_SOURCE_REVIEWED",
     "AICRM_OPENCLAW_MCP_AI_ASSIST_ENDPOINT_REVIEWED",
@@ -3936,6 +3961,7 @@
     "WECHAT_MP_OAUTH_SCOPE",
     "WECHAT_OAUTH_APPID",
     "WECHAT_OAUTH_TIMEOUT",
+    "WECHAT_OPEN_PLATFORM_SCOPE_ID",
     "WECHAT_PAY_API_BASE",
     "WECHAT_PAY_API_V3_KEY",
     "WECHAT_PAY_APP_ID",
@@ -4901,7 +4927,7 @@
     }
   ],
   "migration_heads": [
-    "0171_user_ops_send_seq"
+    "0173_oneid_business_references"
   ],
   "openapi_components": {
     "schemas": {
@@ -52367,6 +52393,31 @@
       "write_owner": "aicrm_next.crm.customer_read_model"
     },
     {
+      "domain": "identity_contact",
+      "drop_candidate": false,
+      "lifecycle": "canonical",
+      "migration_source": "0172_wecom_oneid_core",
+      "pii_level": "direct_identifier",
+      "read_owners": [
+        "aicrm_next.crm.customer_read_model",
+        "aicrm_next.crm.sidebar_write"
+      ],
+      "table": "customer_identities",
+      "write_owner": "aicrm_next.crm.identity_contact"
+    },
+    {
+      "domain": "identity_contact",
+      "drop_candidate": false,
+      "lifecycle": "audit",
+      "migration_source": "0172_wecom_oneid_core",
+      "pii_level": "internal_contact",
+      "read_owners": [
+        "identity conflict operations"
+      ],
+      "table": "customer_identity_conflicts",
+      "write_owner": "aicrm_next.crm.identity_contact"
+    },
+    {
       "domain": "customer_read_model",
       "drop_candidate": false,
       "lifecycle": "read_model",
@@ -52415,6 +52466,18 @@
       ],
       "table": "customer_marketing_state_history",
       "write_owner": "legacy.production_runtime"
+    },
+    {
+      "domain": "identity_contact",
+      "drop_candidate": false,
+      "lifecycle": "audit",
+      "migration_source": "0172_wecom_oneid_core",
+      "pii_level": "internal_contact",
+      "read_owners": [
+        "identity conflict operations"
+      ],
+      "table": "customer_merges",
+      "write_owner": "aicrm_next.crm.identity_contact"
     },
     {
       "domain": "legacy_customer_projection",
@@ -52526,6 +52589,20 @@
       ],
       "table": "customer_value_segment_history",
       "write_owner": "legacy.production_runtime"
+    },
+    {
+      "domain": "identity_contact",
+      "drop_candidate": false,
+      "lifecycle": "canonical",
+      "migration_source": "0172_wecom_oneid_core",
+      "pii_level": "internal_contact",
+      "read_owners": [
+        "aicrm_next.crm.customer_read_model",
+        "aicrm_next.crm.sidebar_write",
+        "aicrm_next.extensions.forms.questionnaire"
+      ],
+      "table": "customers",
+      "write_owner": "aicrm_next.crm.identity_contact"
     },
     {
       "domain": "data_health",
@@ -54331,7 +54408,7 @@
         "aicrm_next.insights.admin_read_model"
       ],
       "table": "wecom_external_contact_follow_users",
-      "write_owner": "aicrm_next.crm.owner_migration"
+      "write_owner": "aicrm_next.crm.identity_contact"
     },
     {
       "domain": "identity_contact",
@@ -54346,7 +54423,7 @@
         "aicrm_next.insights.admin_read_model"
       ],
       "table": "wecom_external_contact_identity_map",
-      "write_owner": "aicrm_next.crm.owner_migration"
+      "write_owner": "aicrm_next.crm.identity_contact"
     },
     {
       "domain": "group_ops",

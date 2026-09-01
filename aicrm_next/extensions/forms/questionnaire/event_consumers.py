@@ -163,15 +163,6 @@ def questionnaire_webhook_consumer(
             },
             result_summary={"reason": "questionnaire_external_push_not_configured"},
         )
-    if not _text(submission.get("unionid")):
-        return InternalEventConsumerResult(
-            status="failed_retryable",
-            request_summary={"event_id": event.event_id, "submission_id": submission_id},
-            response_summary={"external_effect_job_created": False, "reason": "missing_unionid"},
-            error_code="missing_unionid",
-            error_message="questionnaire external push requires a resolved canonical unionid",
-            retry_after_seconds=300,
-        )
     body = build_questionnaire_external_push_payload(
         questionnaire=questionnaire,
         submission=submission,
@@ -306,12 +297,13 @@ def questionnaire_tag_consumer(
             result_summary={"reason": "questionnaire_tags_not_configured"},
         )
     unionid = _text(submission.get("unionid"))
+    customer_id = _text(submission.get("customer_id"))
     external_userid = _text(submission.get("external_userid"))
     owner_userid = _text(submission.get("follow_user_userid"))
     missing = [
         name
         for name, value in (
-            ("unionid", unionid),
+            ("customer_id", customer_id),
             ("external_userid", external_userid),
             ("follow_user_userid", owner_userid),
         )
@@ -328,7 +320,7 @@ def questionnaire_tag_consumer(
                 "external_userid_present": bool(external_userid),
                 "follow_user_userid_present": bool(owner_userid),
             },
-            error_code="identity_pending_unionid" if "unionid" in missing else "tag_identity_incomplete",
+            error_code="identity_pending" if "customer_id" in missing else "tag_identity_incomplete",
             error_message="questionnaire tag execution is waiting for canonical identity",
             retry_after_seconds=300,
         )
@@ -336,8 +328,8 @@ def questionnaire_tag_consumer(
         effects = ExternalEffectService()
         existing = effects.find_existing_job(
             effect_type=WECOM_CONTACT_TAG_MARK,
-            target_type="unionid",
-            target_id=unionid,
+            target_type="external_userid",
+            target_id=external_userid,
             business_type="questionnaire_submission",
             business_id=submission_id,
         )
@@ -347,12 +339,13 @@ def questionnaire_tag_consumer(
             effect_type=WECOM_CONTACT_TAG_MARK,
             adapter_name="wecom_tag",
             operation="tag_mark",
-            target_type="unionid",
-            target_id=unionid,
+            target_type="external_userid",
+            target_id=external_userid,
             business_type="questionnaire_submission",
             business_id=submission_id,
             payload={
                 "target_unionid": unionid,
+                "target_customer_id": int(customer_id),
                 "external_userid": external_userid,
                 "follow_user_userid": owner_userid,
                 "tag_ids": tag_ids,
@@ -367,7 +360,8 @@ def questionnaire_tag_consumer(
                 "questionnaire_id": int(questionnaire_id or 0),
                 "submission_id": submission_id,
                 "tag_count": len(tag_ids),
-                "unionid_present": True,
+                "unionid_present": bool(unionid),
+                "customer_id_present": True,
                 "external_userid_present": True,
                 "follow_user_userid_present": True,
             },

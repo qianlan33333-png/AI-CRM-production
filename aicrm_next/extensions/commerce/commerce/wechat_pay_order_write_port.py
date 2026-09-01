@@ -14,6 +14,8 @@ class WeChatPayOrderCreate:
     description: str
     amount_total: int
     currency: str
+    customer_id: int
+    payer_identity_id: int
     unionid: str
     payer_name_snapshot: str
     success_url: str

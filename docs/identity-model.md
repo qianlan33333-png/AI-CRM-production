@@ -1,4 +1,7 @@
-# Unionid 主身份模型
+# UnionID 兼容身份模型（已被 OneID ADR 取代）
+
+> 当前决策见 `docs/adr/2026-09-01-wechat-ecosystem-oneid-correlation.md`。本文仅保留为
+> `crm_user_identity` 兼容路径的历史说明，不再定义系统 canonical customer identity。
 
 ## 唯一 canonical identity
 

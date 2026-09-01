@@ -118,14 +118,18 @@ def test_action_token_rejects_expiry_tampering_and_safe_methods() -> None:
         )
 
 
-def test_sidebar_context_token_supports_legacy_customer_cookie_without_follow_relation(
+def test_sidebar_context_token_requires_current_active_follow_relation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("WECOM_CORP_ID", "corp-a")
 
     class RelationService:
         def authorize(self, **kwargs) -> bool:
-            raise AssertionError(f"context-token must not query follow relation: {kwargs}")
+            return kwargs == {
+                "corp_id": "corp-a",
+                "user_id": "staff-a",
+                "external_userid": "external-a",
+            }
 
     monkeypatch.setattr(
         "aicrm_next.crm.identity_contact.sidebar_jssdk.build_sidebar_authorization_service",
@@ -151,23 +155,18 @@ def test_sidebar_context_token_supports_legacy_customer_cookie_without_follow_re
     issued = client.post("/api/sidebar/context-token", json={"external_userid": "external-a"})
     switched = client.post("/api/sidebar/context-token", json={"external_userid": "external-b"})
     assert issued.status_code == 200
+    assert issued.json()["context_status"] == "ready"
     assert issued.json()["sidebar_owner_token_status"] == "issued"
     assert issued.json()["sidebar_owner_context"]["source"] == "sidebar_context_token_oauth_session"
-    assert switched.status_code == 200
-    assert switched.json()["sidebar_owner_token_status"] == "issued"
-    assert issued.json()["sidebar_owner_token"] != switched.json()["sidebar_owner_token"]
+    assert switched.status_code == 403
+    assert switched.json()["context_status"] == "forbidden"
+    assert switched.json()["sidebar_owner_token"] == ""
 
     viewer_session = client.cookies.get(SIDEBAR_VIEWER_COOKIE)
     assert validate_sidebar_owner_context(
         token=issued.json()["sidebar_owner_token"],
         viewer_session_cookie=viewer_session,
         external_userid="external-a",
-        expected_corp_id="corp-a",
-    )["ok"]
-    assert validate_sidebar_owner_context(
-        token=switched.json()["sidebar_owner_token"],
-        viewer_session_cookie=viewer_session,
-        external_userid="external-b",
         expected_corp_id="corp-a",
     )["ok"]
     replay = validate_sidebar_owner_context(
@@ -178,6 +177,61 @@ def test_sidebar_context_token_supports_legacy_customer_cookie_without_follow_re
     )
     assert replay["ok"] is False
     assert replay["status"] == "sidebar_customer_scope_forbidden"
+
+
+def test_sidebar_context_token_returns_opaque_provisioning_state_for_unseen_contact(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("WECOM_CORP_ID", "corp-a")
+
+    class RelationService:
+        def authorize(self, **_kwargs) -> bool:
+            return False
+
+    class OneIDService:
+        def customer_context_state(self, **_kwargs):
+            return {"identity_exists": False, "relation_active": False}
+
+    planned: list[dict] = []
+    monkeypatch.setattr(
+        "aicrm_next.crm.identity_contact.sidebar_jssdk.build_sidebar_authorization_service",
+        lambda: RelationService(),
+    )
+    monkeypatch.setattr("aicrm_next.crm.identity_contact.sidebar_jssdk.database_mode", lambda: "postgres")
+    monkeypatch.setattr("aicrm_next.crm.identity_contact.sidebar_jssdk.PostgresOneIDService", OneIDService)
+    monkeypatch.setattr(
+        "aicrm_next.crm.identity_contact.sidebar_jssdk.enqueue_sidebar_identity_verification",
+        lambda **kwargs: planned.append(kwargs) or {"status": "queued", "real_external_call_executed": False},
+    )
+    client = TestClient(create_app(), raise_server_exceptions=False)
+    client.cookies.set(
+        SIDEBAR_VIEWER_COOKIE,
+        sign_session_payload(
+            {
+                "auth_source": "wecom_sidebar_oauth",
+                "wecom_userid": "staff-a",
+                "corp_id": "corp-a",
+                "session_id": "session-a",
+                "iat": int(time()),
+            }
+        ),
+    )
+
+    response = client.post("/api/sidebar/context-token", json={"external_userid": "external-new"})
+
+    assert response.status_code == 202
+    assert response.json()["context_status"] == "provisioning"
+    assert response.json()["sidebar_owner_token"] == ""
+    assert response.json()["sync_token"]
+    assert "external-new" not in response.json()["sync_token"]
+    assert response.json()["retry_after"] == 2
+    assert planned == [
+        {
+            "corp_id": "corp-a",
+            "owner_userid": "staff-a",
+            "external_userid": "external-new",
+        }
+    ]
 
 
 def test_sidebar_oauth_cookie_is_employee_scoped_and_callback_url_is_clean(

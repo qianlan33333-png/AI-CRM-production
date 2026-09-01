@@ -129,7 +129,7 @@ def public_pay_landing(request: Request, path: str) -> Response:
     except NotFoundError:
         return HTMLResponse(render_not_found_page(path), status_code=404, headers=route_headers())
     page_state = checkout_page_state(product, request)
-    if page_state.get("identity_error") == "unionid_oauth_required" and page_state.get("oauth_start_url"):
+    if page_state.get("identity_error") in {"unionid_oauth_required", "wechat_oauth_required"} and page_state.get("oauth_start_url"):
         return RedirectResponse(str(page_state["oauth_start_url"]), status_code=302, headers=route_headers())
     return HTMLResponse(render_pay_landing(product, page_state), headers=route_headers())
 

@@ -36,6 +36,7 @@ RUNTIME_SETTING_KEYS = frozenset(
         "AICRM_QUESTIONNAIRE_OAUTH_ADAPTER_MODE",
         "AICRM_QUESTIONNAIRE_OAUTH_ENABLE_REAL",
         "AICRM_QUESTIONNAIRE_OAUTH_REDIRECT_ALLOWLIST",
+        "WECHAT_MP_APP_ID",
     }
 )
 
@@ -96,10 +97,14 @@ def _env_true(name: str) -> bool:
 
 
 def resolve_adapter_mode() -> str:
-    explicit = runtime_setting(
-        "AICRM_QUESTIONNAIRE_OAUTH_ADAPTER_MODE",
-        "",
-    ).strip().lower()
+    explicit = (
+        runtime_setting(
+            "AICRM_QUESTIONNAIRE_OAUTH_ADAPTER_MODE",
+            "",
+        )
+        .strip()
+        .lower()
+    )
     if explicit in ADAPTER_MODES:
         if explicit == "real_enabled" and not _env_true("AICRM_QUESTIONNAIRE_OAUTH_ENABLE_REAL"):
             return "real_blocked"
@@ -186,6 +191,9 @@ def questionnaire_h5_identity_from_cookies(cookies: Mapping[str, str]) -> Json:
         return {}
     return {
         "openid": str(payload.get("openid") or "").strip(),
+        "app_id": str(payload.get("app_id") or "").strip(),
+        "customer_id": int(payload.get("customer_id") or 0),
+        "respondent_identity_id": int(payload.get("respondent_identity_id") or 0),
         "unionid": str(payload.get("unionid") or "").strip(),
         "respondent_key": str(payload.get("respondent_key") or "").strip(),
         "external_userid": str(payload.get("external_userid") or "").strip(),
@@ -198,6 +206,9 @@ def build_questionnaire_h5_identity_cookie(identity: Mapping[str, Any]) -> str:
     payload = {
         "respondent_key": str(identity.get("respondent_key") or "").strip(),
         "openid": str(identity.get("openid") or "").strip(),
+        "app_id": str(identity.get("app_id") or "").strip(),
+        "customer_id": int(identity.get("customer_id") or 0),
+        "respondent_identity_id": int(identity.get("respondent_identity_id") or 0),
         "unionid": str(identity.get("unionid") or "").strip(),
         "external_userid": str(identity.get("external_userid") or "").strip(),
         "slug": str(identity.get("slug") or "").strip(),
@@ -327,10 +338,16 @@ class QuestionnaireOAuthAdapter:
         return payload
 
     def create_identity_session(self, identity: Json, state_payload: Json) -> tuple[Json, str]:
-        respondent_key = identity.get("unionid") or identity.get("openid") or identity.get("external_userid") or ""
+        customer_id = int(identity.get("customer_id") or 0)
+        respondent_key = (
+            f"customer:{customer_id}" if customer_id else identity.get("unionid") or identity.get("openid") or identity.get("external_userid") or ""
+        )
         session = {
             "respondent_key": respondent_key,
             "openid": identity.get("openid", ""),
+            "app_id": identity.get("app_id", ""),
+            "customer_id": customer_id,
+            "respondent_identity_id": int(identity.get("respondent_identity_id") or 0),
             "unionid": identity.get("unionid", ""),
             "external_userid": identity.get("external_userid", ""),
             "slug": state_payload.get("slug", ""),
@@ -354,23 +371,39 @@ class QuestionnaireOAuthAdapter:
                     target_id=str(state_payload.get("slug") or ""),
                     status_code=200,
                 )
-            from aicrm_next.crm.identity_contact.application import ResolvePersonIdentityQuery
-            from aicrm_next.crm.identity_contact.wechat_unionid_guard import resolve_oauth_unionid
-
-            canonical_unionid = resolve_oauth_unionid(
-                identity,
-                identity_query=ResolvePersonIdentityQuery(),
-            )
-            if not canonical_unionid:
-                self._record_diagnostic("unionid_required", request, state_payload)
+            app_id = runtime_setting("WECHAT_MP_APP_ID").strip() or ("wechat_mp_test_app" if self.mode in {"fake", "sandbox"} else "")
+            openid = str(identity.get("openid") or "").strip()
+            if not app_id or not openid:
+                self._record_diagnostic("openid_required", request, state_payload)
                 return self._error(
-                    "unionid_required",
-                    "WeChat OAuth did not provide a canonical UnionID",
+                    "openid_required",
+                    "WeChat OAuth did not provide an app-scoped OpenID",
                     event_type="questionnaire.oauth.callback.identity_missing",
                     target_id=str(state_payload.get("slug") or ""),
                     status_code=409,
                 )
-            identity["unionid"] = canonical_unionid
+            identity["app_id"] = app_id
+            if production_data_ready():
+                from aicrm_next.crm.identity_contact.oneid_repository import PostgresOneIDService
+
+                resolution = PostgresOneIDService().ensure_verified_wechat_identity(
+                    app_id=app_id,
+                    openid=openid,
+                    unionid=str(identity.get("unionid") or "").strip(),
+                    source_type="questionnaire_wechat_oauth",
+                    source_event_id=str(request.code or "").strip(),
+                )
+                if resolution.get("status") == "conflict":
+                    self._record_diagnostic("identity_conflict", request, state_payload)
+                    return self._error(
+                        "identity_conflict",
+                        "WeChat identity conflicts with an existing customer",
+                        event_type="questionnaire.oauth.callback.identity_conflict",
+                        target_id=str(state_payload.get("slug") or ""),
+                        status_code=409,
+                    )
+                identity["customer_id"] = int(resolution.get("customer_id") or 0)
+                identity["respondent_identity_id"] = int(resolution.get("openid_identity_id") or resolution.get("identity_id") or 0)
             _USED_NONCES.add(str(state_payload["nonce"]))
             session_identity, signed_cookie = self.create_identity_session(identity, state_payload)
             result = {

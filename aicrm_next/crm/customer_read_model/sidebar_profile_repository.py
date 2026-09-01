@@ -19,8 +19,40 @@ class PostgresSidebarCustomerProfileProjectionRepository:
         request: SaveSidebarProfileFieldsRequest,
     ) -> dict[str, Any]:
         unionid = _text(request.unionid)
-        if not unionid:
-            raise ValueError("unionid is required")
+        customer_id = int(request.customer_id or 0)
+        if customer_id <= 0 and not unionid:
+            raise ValueError("customer_id or unionid is required")
+        if customer_id > 0:
+            row = executor.execute(
+                """
+                INSERT INTO sidebar_customer_profile_fields (
+                    customer_id, unionid, source, industry, industry_description,
+                    needs_blockers_followup, updated_by, created_at, updated_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, NOW(), NOW())
+                ON CONFLICT (customer_id) WHERE customer_id IS NOT NULL DO UPDATE SET
+                    unionid = COALESCE(NULLIF(EXCLUDED.unionid, ''), sidebar_customer_profile_fields.unionid),
+                    source = EXCLUDED.source,
+                    industry = EXCLUDED.industry,
+                    industry_description = EXCLUDED.industry_description,
+                    needs_blockers_followup = EXCLUDED.needs_blockers_followup,
+                    updated_by = EXCLUDED.updated_by,
+                    updated_at = NOW()
+                RETURNING source, industry, industry_description,
+                          needs_blockers_followup, updated_by, updated_at
+                """,
+                (
+                    customer_id,
+                    unionid,
+                    _text(request.source),
+                    _text(request.industry),
+                    _text(request.industry_description),
+                    _text(request.needs_blockers_followup),
+                    _text(request.updated_by),
+                ),
+            ).fetchone()
+            if not row:
+                raise RuntimeError("sidebar customer profile projection write returned no row")
+            return dict(row)
         row = executor.execute(
             """
             INSERT INTO sidebar_customer_profile_fields (
@@ -34,7 +66,7 @@ class PostgresSidebarCustomerProfileProjectionRepository:
                 updated_at
             )
             VALUES (%s, %s, %s, %s, %s, %s, NOW(), NOW())
-            ON CONFLICT (unionid) DO UPDATE SET
+            ON CONFLICT (unionid) WHERE unionid <> '' DO UPDATE SET
                 source = EXCLUDED.source,
                 industry = EXCLUDED.industry,
                 industry_description = EXCLUDED.industry_description,

@@ -1,7 +1,7 @@
 {
   "schema_version": "migration_compatibility.v1",
   "baseline_revision": "0169_operation_cycle_codex_actions",
-  "current_head": "0171_user_ops_send_seq",
+  "current_head": "0173_oneid_business_references",
   "compatibility_epoch": 1,
   "migrations": [
     {
@@ -15,6 +15,22 @@
     {
       "revision": "0171_user_ops_send_seq",
       "parent_revision": "0170_release_governance_foundation",
+      "change_kind": "expand",
+      "previous_runtime_compatible": true,
+      "downgrade_policy": "forward_only",
+      "compatibility_epoch": 1
+    },
+    {
+      "revision": "0172_wecom_oneid_core",
+      "parent_revision": "0171_user_ops_send_seq",
+      "change_kind": "expand",
+      "previous_runtime_compatible": true,
+      "downgrade_policy": "forward_only",
+      "compatibility_epoch": 1
+    },
+    {
+      "revision": "0173_oneid_business_references",
+      "parent_revision": "0172_wecom_oneid_core",
       "change_kind": "expand",
       "previous_runtime_compatible": true,
       "downgrade_policy": "forward_only",
