@@ -20,7 +20,7 @@
 Go 条件：
 
 - 已确认发布窗口和回滚负责人。
-- 已确认可登录 `150.158.82.186`。
+- 已确认可登录 `124.220.53.183`。
 - 当前 quick ACK 仍保护页面，页面层可用。
 - 本地 dry-run command plan 返回 `ok=true`、`dry_run_only=true`、`missing_assets=[]`。
 - 生产代码已包含 `webhook_inbox`、5002 ingress、callback worker、admin webhook inbox、checker 和 runbook。
