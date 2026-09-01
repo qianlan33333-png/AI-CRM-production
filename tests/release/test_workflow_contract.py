@@ -47,6 +47,12 @@ def test_full_regression_has_only_manual_or_high_risk_call_and_no_matrix() -> No
 def test_promotion_and_deploy_preserve_exact_sha_lock_health_and_rollback() -> None:
     promotion = (WORKFLOWS / "promote-production.yml").read_text(encoding="utf-8")
     deploy = (WORKFLOWS / "deploy.yml").read_text(encoding="utf-8")
+    deploy_workflow = _workflow("deploy.yml")
+    deploy_ssh_step = next(
+        step
+        for step in deploy_workflow["jobs"]["deploy"]["steps"]
+        if step.get("name") == "Deploy via SSH"
+    )
     assert "workflow_run:" not in promotion
     assert "push:" in promotion
     assert "branches:" in promotion
@@ -62,3 +68,4 @@ def test_promotion_and_deploy_preserve_exact_sha_lock_health_and_rollback() -> N
     assert "before_sha" in deploy
     assert "scripts/ops/check_runtime_readiness.py" in deploy
     assert "tee /tmp/aicrm-runtime-readiness.json" in deploy
+    assert deploy_ssh_step["with"]["command_timeout"] == "20m"
