@@ -310,7 +310,7 @@ class PostgresSidebarWriteRepository:
             if identity and requested_owner_userid and owner_candidates and requested_owner_userid not in owner_candidates:
                 raise KeyError("customer not found")
 
-            if not identity:
+            if not identity or not _text(identity.get("unionid")):
                 resolution = self._identity_write_port.enqueue_sidebar_identity_resolution(
                     conn,
                     command_id=command_id,
@@ -432,6 +432,7 @@ class PostgresSidebarWriteRepository:
                         industry_description=profile_fields["industry_description"],
                         needs_blockers_followup=profile_fields["needs_blockers_followup"],
                         updated_by=profile_fields["updated_by"],
+                        customer_id=int(identity.get("customer_id") or 0),
                     ),
                 )
                 if profile_row:
@@ -443,7 +444,7 @@ class PostgresSidebarWriteRepository:
                         "updated_by": _text(profile_row.get("updated_by")),
                     }
                     updated_at = _text(profile_row.get("updated_at"))
-            if any(contact_changes.values()):
+            if any(contact_changes.values()) and unionid:
                 identity_row = self._identity_write_port.update_sidebar_contact_profile(
                     conn,
                     unionid=unionid,
@@ -459,6 +460,15 @@ class PostgresSidebarWriteRepository:
                         "description": _text((identity_row.get("profile_json") or {}).get("description")),
                     }
                     updated_at = _text(identity_row.get("updated_at")) or updated_at
+            elif any(contact_changes.values()):
+                # The local OneID customer is already usable without UnionID.
+                # Provider-owned remark/name fields remain an External Effect;
+                # do not bypass identity_contact by mutating its mirror here.
+                changes["contact"] = {
+                    "customer_name": contact_changes["display_name"],
+                    "remark": contact_changes["remark"],
+                    "description": contact_changes["description"],
+                }
             conn.commit()
             return {
                 "external_userid": normalized_external_userid,
@@ -518,6 +528,36 @@ class PostgresSidebarWriteRepository:
             }
 
     def _identity_row(self, conn, external_userid: str) -> JsonDict | None:
+        oneid = conn.execute(
+            """
+            SELECT COALESCE(root.id, customer.id) AS customer_id,
+                   COALESCE(identity.unionid, '') AS unionid,
+                   COALESCE(NULLIF(identity.primary_external_userid, ''), identity_map.external_userid) AS primary_external_userid,
+                   identity.mobile,
+                   identity.mobile_normalized,
+                   identity.mobile_source,
+                   COALESCE(NULLIF(follow_user.user_id, ''), NULLIF(identity_map.follow_user_userid, ''), identity.primary_owner_userid, '') AS primary_owner_userid,
+                   COALESCE(NULLIF(identity_map.name, ''), identity.customer_name, '') AS customer_name,
+                   COALESCE(NULLIF(follow_user.remark, ''), identity.remark, '') AS remark
+            FROM wecom_external_contact_identity_map identity_map
+            JOIN customers customer ON customer.id = identity_map.customer_id
+            LEFT JOIN customers root ON root.id = customer.merged_into_customer_id
+            LEFT JOIN crm_user_identity identity ON identity.customer_id = COALESCE(root.id, customer.id)
+            LEFT JOIN wecom_external_contact_follow_users follow_user
+              ON follow_user.corp_id = identity_map.corp_id
+             AND follow_user.external_userid = identity_map.external_userid
+             AND follow_user.relation_status = 'active'
+            WHERE identity_map.external_userid = %s
+              AND identity_map.status = 'active'
+              AND COALESCE(root.status, customer.status) = 'active'
+            ORDER BY follow_user.is_primary DESC NULLS LAST, follow_user.updated_at DESC NULLS LAST
+            LIMIT 1
+            FOR UPDATE OF identity_map, customer
+            """,
+            (external_userid,),
+        ).fetchone()
+        if oneid:
+            return dict(oneid)
         resolution = resolve_identity_with_dbapi(
             conn,
             ResolvePersonIdentityRequest(external_userid=external_userid),

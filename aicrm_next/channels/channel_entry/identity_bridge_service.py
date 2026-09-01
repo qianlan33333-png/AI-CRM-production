@@ -9,6 +9,7 @@ from aicrm_next.platform.shared.runtime_settings import managed_runtime_setting
 
 from .domain import ENTRY_CHANGE_TYPES, text
 from .identity_bridge_repo import IdentityBridgeRepository, PostgresIdentityBridgeRepository, build_identity_bridge_repository
+from .crm_port import apply_verified_wecom_detail
 from .wecom_adapter import WeComAdapterBlocked, WeComApiError, get_wecom_adapter
 
 SIDEBAR_IDENTITY_REFRESH_INTERVAL_SECONDS = 60
@@ -188,6 +189,20 @@ class IdentityBridgeService:
         owner_userid: str,
         corp_id: str,
     ) -> dict[str, Any]:
+        detail_external = text(((detail_payload or {}).get("external_contact") or {}).get("external_userid"))
+        if detail_external != text(external_userid):
+            return {"status": "failed", "reason": "provider_target_mismatch", "real_external_call_executed": False}
+        follow_userids = {
+            text((item or {}).get("userid"))
+            for item in list((detail_payload or {}).get("follow_user") or [])
+            if text((item or {}).get("userid"))
+        }
+        if not text(owner_userid) or text(owner_userid) not in follow_userids:
+            return {
+                "status": "failed",
+                "reason": "provider_relationship_mismatch",
+                "real_external_call_executed": False,
+            }
         with self._repository_session():
             record = self.repository.normalize_external_contact_identity(
                 corp_id,
@@ -198,12 +213,31 @@ class IdentityBridgeService:
             if not text(record.get("external_userid")):
                 return {"status": "skipped", "reason": "contact_detail_missing_external_userid"}
 
+            oneid_result: dict[str, Any] = {}
+            if isinstance(self.repository, PostgresIdentityBridgeRepository):
+                oneid_result = apply_verified_wecom_detail(
+                    corp_id=corp_id,
+                    external_userid=external_userid,
+                    owner_userid=owner_userid,
+                    detail_payload=detail_payload,
+                )
+                if text(oneid_result.get("status")) == "conflict":
+                    return {
+                        **oneid_result,
+                        "reason": text(oneid_result.get("reason")) or "identity_conflict",
+                        "unionid_present": bool(text(record.get("unionid"))),
+                        "openid_present": bool(text(record.get("openid"))),
+                    }
+
             identity_map_id = self.repository.upsert_external_contact_identity(record)
             if not text(record.get("unionid")):
                 return {
                     "status": "pending_identity",
                     "reason": "missing_unionid",
                     "identity_map_id": int(identity_map_id or 0),
+                    "customer_id": int(oneid_result.get("customer_id") or 0),
+                    "customer_status": "active",
+                    "unionid_status": text(oneid_result.get("unionid_status")) or "pending",
                     "unionid_present": False,
                     "openid_present": bool(text(record.get("openid"))),
                     "mobile_binding": {"status": "skipped", "reason": "identity_pending_unionid"},
@@ -231,6 +265,8 @@ class IdentityBridgeService:
             return {
                 "status": "success",
                 "identity_map_id": int(identity_map_id or 0),
+                "customer_id": int(oneid_result.get("customer_id") or 0),
+                "merge_action": text(oneid_result.get("action")),
                 "unionid": text(record.get("unionid")),
                 "unionid_present": bool(text(record.get("unionid"))),
                 "openid_present": bool(text(record.get("openid"))),

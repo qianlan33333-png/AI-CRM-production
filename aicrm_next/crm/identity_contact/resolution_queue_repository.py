@@ -157,15 +157,26 @@ class PostgresIdentityResolutionQueueRepository:
             WITH due AS (
                 SELECT id
                 FROM crm_user_identity_resolution_queue
-                WHERE status = 'pending'
-                  AND external_effect_job_id IS NULL
-                  AND (next_attempt_at IS NULL OR next_attempt_at <= CURRENT_TIMESTAMP)
+                WHERE external_effect_job_id IS NULL
+                  AND (
+                      (
+                          status = 'pending'
+                          AND (next_attempt_at IS NULL OR next_attempt_at <= CURRENT_TIMESTAMP)
+                      )
+                      OR (
+                          status = 'failed'
+                          AND enrichment_status = 'pending'
+                          AND last_enrichment_attempt_at <= CURRENT_TIMESTAMP - INTERVAL '24 hours'
+                      )
+                  )
                 ORDER BY COALESCE(next_attempt_at, first_seen_at, created_at) ASC, id ASC
                 LIMIT %s
                 FOR UPDATE SKIP LOCKED
             )
             UPDATE crm_user_identity_resolution_queue q
-            SET attempts = COALESCE(attempts, 0) + 1,
+            SET status = 'pending',
+                completed_at = NULL,
+                attempts = COALESCE(attempts, 0) + 1,
                 attempt_count = COALESCE(attempt_count, 0) + 1,
                 last_seen_at = CURRENT_TIMESTAMP,
                 next_attempt_at = CURRENT_TIMESTAMP + make_interval(secs => %s),
@@ -207,6 +218,7 @@ class PostgresIdentityResolutionQueueRepository:
                 """
                 UPDATE crm_user_identity_resolution_queue
                 SET status = 'resolved',
+                    enrichment_status = 'resolved',
                     resolved_unionid = %s,
                     resolved_at = CURRENT_TIMESTAMP,
                     last_error = '',
@@ -223,10 +235,17 @@ class PostgresIdentityResolutionQueueRepository:
                 """
                 UPDATE crm_user_identity_resolution_queue
                 SET status = 'pending',
+                    enrichment_status = 'pending',
+                    last_enrichment_attempt_at = CURRENT_TIMESTAMP,
                     last_error = %s,
                     payload_json = payload_json || %s,
-                    next_attempt_at = CURRENT_TIMESTAMP
-                        + (LEAST(GREATEST(COALESCE(attempts, 1), 1), 30) || ' minutes')::interval,
+                    next_attempt_at = CURRENT_TIMESTAMP + make_interval(mins => CASE COALESCE(attempts, 1)
+                        WHEN 1 THEN 1
+                        WHEN 2 THEN 5
+                        WHEN 3 THEN 30
+                        WHEN 4 THEN 120
+                        ELSE 1440
+                    END),
                     updated_at = CURRENT_TIMESTAMP
                 WHERE id = %s
                 """,
@@ -238,6 +257,8 @@ class PostgresIdentityResolutionQueueRepository:
                 """
                 UPDATE crm_user_identity_resolution_queue
                 SET status = 'failed',
+                    enrichment_status = 'pending',
+                    last_enrichment_attempt_at = CURRENT_TIMESTAMP,
                     last_error = %s,
                     payload_json = payload_json || %s,
                     next_attempt_at = NULL,
@@ -292,6 +313,11 @@ class PostgresIdentityResolutionQueueRepository:
                 """
                 UPDATE crm_user_identity_resolution_queue
                 SET status = :status,
+                    enrichment_status = CASE
+                        WHEN :status = 'held' AND :last_error = 'config_missing'
+                            THEN 'capability_unavailable'
+                        ELSE enrichment_status
+                    END,
                     last_error = :last_error,
                     next_attempt_at = NULL,
                     hold_reason = CASE WHEN :status = 'held' THEN :last_error ELSE '' END,
@@ -322,7 +348,7 @@ class PostgresIdentityResolutionQueueRepository:
         session: Any,
         request: CompleteIdentityResolutionRequest,
     ) -> bool:
-        if request.result_status not in {"resolved", "conflict"}:
+        if request.result_status not in {"resolved", "conflict", "pending", "ignored"}:
             raise ValueError("unsupported identity resolution completion status")
         receipt = session.execute(
             text(
@@ -351,11 +377,54 @@ class PostgresIdentityResolutionQueueRepository:
         ).fetchone()
         if not receipt:
             return False
+        if request.result_status == "pending":
+            session.execute(
+                text(
+                    """
+                    UPDATE crm_user_identity_resolution_queue
+                    SET status = CASE WHEN COALESCE(attempts, 0) + 1 >= 5 THEN 'failed' ELSE 'pending' END,
+                        enrichment_status = 'pending',
+                        attempts = COALESCE(attempts, 0) + 1,
+                        attempt_count = COALESCE(attempt_count, 0) + 1,
+                        external_effect_job_id = NULL,
+                        last_enrichment_attempt_at = CURRENT_TIMESTAMP,
+                        last_error = 'missing_unionid',
+                        next_attempt_at = CASE
+                            WHEN COALESCE(attempts, 0) + 1 >= 5 THEN NULL
+                            ELSE CURRENT_TIMESTAMP + make_interval(mins => CASE COALESCE(attempts, 0) + 1
+                                WHEN 1 THEN 1
+                                WHEN 2 THEN 5
+                                WHEN 3 THEN 30
+                                WHEN 4 THEN 120
+                                ELSE 1440
+                            END)
+                        END,
+                        completed_at = CASE
+                            WHEN COALESCE(attempts, 0) + 1 >= 5 THEN CURRENT_TIMESTAMP
+                            ELSE completed_at
+                        END,
+                        row_version = row_version + 1,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE id = :queue_id
+                      AND external_effect_job_id = :job_id
+                      AND status = 'pending'
+                    """
+                ),
+                {
+                    "queue_id": int(request.queue_id or 0),
+                    "job_id": int(request.job_id or 0),
+                },
+            )
+            return True
         session.execute(
             text(
                 """
                 UPDATE crm_user_identity_resolution_queue
                 SET status = :status,
+                    enrichment_status = CASE
+                        WHEN :status = 'ignored' THEN 'not_applicable'
+                        ELSE :status
+                    END,
                     resolved_unionid = :resolved_unionid,
                     conflict_reason = :conflict_reason,
                     completed_at = CURRENT_TIMESTAMP,

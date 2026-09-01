@@ -6,9 +6,8 @@ import json
 import logging
 from typing import Any, Protocol
 
+from aicrm_next.crm.identity_contact.resolver import resolve_identity_with_dbapi
 from aicrm_next.extensions.commerce.commerce.repo import build_commerce_repository
-from aicrm_next.crm.identity_contact.dto import ResolvePersonIdentityRequest
-from aicrm_next.crm.identity_contact.resolver import resolve_identity_with_dbapi, resolved_unionid
 from aicrm_next.platform.platform_foundation.command_bus.models import CommandContext
 from aicrm_next.platform.platform_foundation.internal_events.models import InternalEventCreateRequest
 from aicrm_next.platform.platform_foundation.internal_events.outbox import enqueue_transactional_internal_event_outbox
@@ -43,13 +42,25 @@ from .member_grid_repo import (
     PostgresMemberGridRepositoryMixin,
     effective_renewal_count_from_events,
 )
+from .order_identity import (
+    compact_trade_product_payload as _compact_trade_product_payload,
+    duration_end as _duration_end,
+    duration_start as _duration_start,
+    order_identity as _order_identity,
+    order_paid_at as _order_paid_at,
+    paid_order as _paid_order,
+    paid_order_customer_id as _paid_order_customer_id,
+    resolve_paid_order_unionid as _resolve_paid_order_unionid,
+)
 
 LOGGER = logging.getLogger(__name__)
+
 
 def _jsonb(value: Any) -> Any:
     from psycopg.types.json import Jsonb
 
     return Jsonb(value if isinstance(value, (dict, list)) else {}, dumps=lambda data: json.dumps(data, ensure_ascii=False, default=str))
+
 
 def _json_object(value: Any) -> dict[str, Any]:
     if isinstance(value, dict):
@@ -62,71 +73,32 @@ def _json_object(value: Any) -> dict[str, Any]:
         return parsed if isinstance(parsed, dict) else {}
     return {}
 
-def _paid_order(order: dict[str, Any]) -> bool:
-    return text(order.get("status")).lower() == "paid" or text(order.get("trade_state")).upper() == "SUCCESS"
-
-def _order_identity(order: dict[str, Any]) -> dict[str, str]:
-    metadata = _json_object(order.get("metadata_json"))
-    identity = metadata.get("payer_identity") if isinstance(metadata.get("payer_identity"), dict) else {}
-    return {
-        "unionid": text(order.get("unionid") or identity.get("unionid")),
-        "external_userid": text(identity.get("external_userid") or order.get("external_userid")),
-        "mobile": text(identity.get("mobile") or order.get("mobile") or order.get("mobile_snapshot")),
-        "payer_name": text(order.get("payer_name_snapshot") or identity.get("payer_name")),
-        "openid": text(identity.get("openid") or order.get("openid")),
-    }
-
-def _resolve_paid_order_unionid(conn: Any, identity: dict[str, str]) -> str:
-    canonical_unionid = text(identity.get("unionid"))
-    if canonical_unionid:
-        query = ResolvePersonIdentityRequest(unionid=canonical_unionid)
-    else:
-        query = ResolvePersonIdentityRequest(
-            external_userid=text(identity.get("external_userid")) or None,
-            openid=text(identity.get("openid")) or None,
-            mobile=text(identity.get("mobile")) or None,
-        )
-    return resolved_unionid(resolve_identity_with_dbapi(conn, query))
-
-
-def _order_paid_at(order: dict[str, Any], transaction: dict[str, Any] | None = None) -> datetime:
-    return parse_datetime(order.get("paid_at")) or parse_datetime((transaction or {}).get("success_time")) or utcnow()
-
-
-def _duration_end(start: datetime, duration_days: int) -> datetime:
-    return start + timedelta(days=duration_days)
-
-
-def _duration_start(end: datetime, duration_days: int) -> datetime:
-    return end - timedelta(days=duration_days)
-
-
-def _compact_trade_product_payload(product: dict[str, Any], *, product_id: Any | None = None) -> dict[str, Any]:
-    price = int(product.get("price_cents") or product.get("amount_total") or 0)
-    slice_count = int(product.get("slice_count") or len(product.get("slices") or []))
-    return {
-        "id": text(product_id if product_id is not None else product.get("id")),
-        "product_code": text(product.get("product_code")),
-        "title": text(product.get("title") or product.get("name")),
-        "name": text(product.get("title") or product.get("name")),
-        "description": text(product.get("description")),
-        "price_cents": price,
-        "amount_total": price,
-        "currency": text(product.get("currency")) or "CNY",
-        "status": text(product.get("status")) or "draft",
-        "enabled": bool(product.get("enabled")),
-        "slice_count": slice_count,
-        "updated_at": isoformat(product.get("trade_updated_at") or product.get("updated_at")),
-    }
-
 
 class ServicePeriodRepository(MemberGridRepositoryProtocol, MemberGridAccessRepositoryProtocol, Protocol):
     def list_products(self, *, limit: int, offset: int) -> dict[str, Any]: ...
-    def create_service_product(self, *, trade_product: dict[str, Any], duration_days: int, membership_config_id: str, membership_config_name: str, link_slug: str, metadata_json: dict[str, Any] | None = None) -> dict[str, Any]: ...
+    def create_service_product(
+        self,
+        *,
+        trade_product: dict[str, Any],
+        duration_days: int,
+        membership_config_id: str,
+        membership_config_name: str,
+        link_slug: str,
+        metadata_json: dict[str, Any] | None = None,
+    ) -> dict[str, Any]: ...
     def get_product(self, service_product_id: str) -> dict[str, Any] | None: ...
     def get_product_by_slug(self, link_slug: str) -> dict[str, Any] | None: ...
     def get_public_product_by_slug(self, link_slug: str) -> dict[str, Any] | None: ...
-    def update_service_product(self, service_product_id: str, *, trade_product: dict[str, Any], duration_days: int, membership_config_id: str, membership_config_name: str, metadata_json: dict[str, Any] | None = None) -> dict[str, Any]: ...
+    def update_service_product(
+        self,
+        service_product_id: str,
+        *,
+        trade_product: dict[str, Any],
+        duration_days: int,
+        membership_config_id: str,
+        membership_config_name: str,
+        metadata_json: dict[str, Any] | None = None,
+    ) -> dict[str, Any]: ...
     def copy_service_product(self, service_product_id: str, *, copied_trade_product: dict[str, Any]) -> dict[str, Any]: ...
     def delete_service_product(self, service_product_id: str) -> dict[str, Any]: ...
     def has_entitlements(self, service_product_id: str) -> bool: ...
@@ -277,6 +249,7 @@ class InMemoryServicePeriodRepository(
         now = utcnow()
         entitlements = [row for row in self._entitlements if text(row.get("service_product_id")) == text(service_product_id)]
         active = [row for row in entitlements if entitlement_status(row.get("end_at"), row.get("status"), now=now) == "active"]
+
         def _expiring_soon(row: dict[str, Any]) -> bool:
             end = parse_datetime(row.get("end_at"))
             return bool(end and now < end <= now + timedelta(days=7))
@@ -328,7 +301,8 @@ class InMemoryServicePeriodRepository(
             return {"ok": True, "idempotent": True, "skipped": True, "reason": "event_already_applied"}
         identity = _order_identity(order)
         unionid = identity["unionid"]
-        if not unionid:
+        customer_id = int(order.get("customer_id") or 0)
+        if not customer_id and not unionid:
             event = self._append_event(
                 product=product,
                 entitlement_id="",
@@ -339,16 +313,16 @@ class InMemoryServicePeriodRepository(
                 duration_days=0,
                 before=None,
                 after=None,
-                payload={"reason": "missing_unionid", "order": order, "transaction": transaction or {}},
+                payload={"reason": "missing_customer_id", "order": order, "transaction": transaction or {}},
             )
             LOGGER.warning(
                 "service_period_grant_failed_missing_unionid",
                 extra=safe_log_fields(out_trade_no=out_trade_no, service_product_id=product.get("id")),
             )
-            return {"ok": False, "skipped": True, "reason": "missing_unionid", "event": event}
+            return {"ok": False, "skipped": True, "reason": "missing_customer_id", "event": event}
         now = utcnow()
         paid_at = _order_paid_at(order, transaction)
-        entitlement = self._find_entitlement(text(product.get("id")), unionid)
+        entitlement = self._find_entitlement(text(product.get("id")), unionid, customer_id=customer_id)
         before = deepcopy(entitlement) if entitlement else None
         duration_days = int(product.get("duration_days") or 0)
         if entitlement and entitlement_status(entitlement.get("end_at"), entitlement.get("status"), now=now) == "active":
@@ -367,6 +341,7 @@ class InMemoryServicePeriodRepository(
             entitlement.update(
                 {
                     "trade_product_id": text(product.get("trade_product_id")),
+                    "customer_id": customer_id or entitlement.get("customer_id"),
                     "external_userid_snapshot": identity["external_userid"],
                     "mobile_snapshot": identity["mobile"],
                     "membership_config_id": text(product.get("membership_config_id")),
@@ -386,6 +361,7 @@ class InMemoryServicePeriodRepository(
                 "tenant_id": TENANT_ID,
                 "service_product_id": text(product.get("id")),
                 "trade_product_id": text(product.get("trade_product_id")),
+                "customer_id": customer_id or None,
                 "unionid": unionid,
                 "external_userid_snapshot": identity["external_userid"],
                 "mobile_snapshot": identity["mobile"],
@@ -520,9 +496,17 @@ class InMemoryServicePeriodRepository(
                 return row
         return None
 
-    def _find_entitlement(self, service_product_id: str, unionid: str) -> dict[str, Any] | None:
+    def _find_entitlement(
+        self,
+        service_product_id: str,
+        unionid: str,
+        *,
+        customer_id: int = 0,
+    ) -> dict[str, Any] | None:
         for row in self._entitlements:
-            if text(row.get("service_product_id")) == text(service_product_id) and text(row.get("unionid")) == text(unionid):
+            same_customer = bool(customer_id) and int(row.get("customer_id") or 0) == customer_id
+            same_unionid = bool(text(unionid)) and text(row.get("unionid")) == text(unionid)
+            if text(row.get("service_product_id")) == text(service_product_id) and (same_customer or same_unionid):
                 return row
         return None
 
@@ -668,9 +652,7 @@ class PostgresServicePeriodRepository(
                 """,
                 (int(limit), int(offset)),
             ).fetchall()
-            total_row = conn.execute(
-                "SELECT count(*) AS total FROM service_period_products WHERE tenant_id = 'aicrm' AND deleted = FALSE"
-            ).fetchone() or {}
+            total_row = conn.execute("SELECT count(*) AS total FROM service_period_products WHERE tenant_id = 'aicrm' AND deleted = FALSE").fetchone() or {}
             items = [self._serialize_join_row(dict(row), include_trade_product=False) for row in rows]
         return {"ok": True, "items": items, "total": int(total_row.get("total") or 0), "limit": limit, "offset": offset}
 
@@ -854,18 +836,22 @@ class PostgresServicePeriodRepository(
 
     def stats(self, service_product_id: str) -> dict[str, Any]:
         with self._connect() as conn:
-            row = conn.execute(
-                """
+            row = (
+                conn.execute(
+                    """
                 SELECT
                     count(*) FILTER (WHERE status = 'active' AND end_at > CURRENT_TIMESTAMP) AS active_user_count,
                     count(*) FILTER (WHERE status = 'active' AND end_at > CURRENT_TIMESTAMP AND end_at <= CURRENT_TIMESTAMP + INTERVAL '7 days') AS expiring_7d_count
                 FROM service_period_entitlements
                 WHERE service_product_id::text = %s
                 """,
-                (text(service_product_id),),
-            ).fetchone() or {}
-            renewal = conn.execute(
-                """
+                    (text(service_product_id),),
+                ).fetchone()
+                or {}
+            )
+            renewal = (
+                conn.execute(
+                    """
                 SELECT count(*) AS total
                 FROM service_period_events renewed
                 WHERE renewed.service_product_id::text = %s
@@ -878,18 +864,23 @@ class PostgresServicePeriodRepository(
                         AND refunded.out_trade_no = renewed.out_trade_no
                   )
                 """,
-                (text(service_product_id),),
-            ).fetchone() or {}
-            amount = conn.execute(
-                """
+                    (text(service_product_id),),
+                ).fetchone()
+                or {}
+            )
+            amount = (
+                conn.execute(
+                    """
                 SELECT COALESCE(sum(GREATEST(COALESCE(o.amount_total, 0) - COALESCE(o.refunded_amount_total, 0), 0)), 0) AS total
                 FROM service_period_events e
                 JOIN wechat_pay_orders o ON o.out_trade_no = e.out_trade_no
                 WHERE e.service_product_id::text = %s
                   AND e.event_type IN ('activated', 'renewed')
                 """,
-                (text(service_product_id),),
-            ).fetchone() or {}
+                    (text(service_product_id),),
+                ).fetchone()
+                or {}
+            )
         return {
             "ok": True,
             "active_user_count": int(row.get("active_user_count") or 0),
@@ -957,10 +948,13 @@ class PostgresServicePeriodRepository(
                 """,
                 tuple(params),
             ).fetchall()
-            total_row = conn.execute(
-                f"SELECT count(*) AS total FROM service_period_entitlements e WHERE {' AND '.join(where)}",
-                tuple(params[:-2]),
-            ).fetchone() or {}
+            total_row = (
+                conn.execute(
+                    f"SELECT count(*) AS total FROM service_period_entitlements e WHERE {' AND '.join(where)}",
+                    tuple(params[:-2]),
+                ).fetchone()
+                or {}
+            )
         now = utcnow()
         items = [
             {
@@ -1008,8 +1002,9 @@ class PostgresServicePeriodRepository(
             if self._event_exists(conn, out_trade_no, {"activated", "renewed"}):
                 return {"ok": True, "idempotent": True, "skipped": True, "reason": "event_already_applied"}
             identity = _order_identity(order)
-            unionid = _resolve_paid_order_unionid(conn, identity)
-            if not unionid:
+            unionid = _resolve_paid_order_unionid(conn, identity, resolve=resolve_identity_with_dbapi)
+            customer_id = _paid_order_customer_id(conn, order, unionid)
+            if not customer_id:
                 event = self._insert_event(
                     conn,
                     product=product,
@@ -1021,15 +1016,23 @@ class PostgresServicePeriodRepository(
                     duration_days=0,
                     before=None,
                     after=None,
-                    payload={"reason": "missing_unionid", "order": order, "transaction": transaction or {}},
+                    payload={"reason": "missing_customer_id", "order": order, "transaction": transaction or {}},
                 )
                 conn.commit()
                 LOGGER.warning(
                     "service_period_grant_failed_missing_unionid",
                     extra=safe_log_fields(out_trade_no=out_trade_no, service_product_id=product.get("id")),
                 )
-                return {"ok": False, "skipped": True, "reason": "missing_unionid", "event": event}
-            result = self._grant_or_renew_with_unionid(conn, product=product, order=order, transaction=transaction or {}, unionid=unionid, out_trade_no=out_trade_no)
+                return {"ok": False, "skipped": True, "reason": "missing_customer_id", "event": event}
+            result = self._grant_or_renew_with_customer(
+                conn,
+                product=product,
+                order=order,
+                transaction=transaction or {},
+                customer_id=customer_id,
+                unionid=unionid,
+                out_trade_no=out_trade_no,
+            )
             conn.commit()
             return result
 
@@ -1092,8 +1095,9 @@ class PostgresServicePeriodRepository(
             before = dict(entitlement)
             duration_days = int(source_event.get("duration_days") or product.get("duration_days") or 0)
             now = utcnow()
-            other_active_events = conn.execute(
-                """
+            other_active_events = (
+                conn.execute(
+                    """
                 SELECT count(*) AS total
                 FROM service_period_events paid
                 WHERE paid.tenant_id = 'aicrm'
@@ -1108,8 +1112,10 @@ class PostgresServicePeriodRepository(
                         AND refunded.out_trade_no = paid.out_trade_no
                   )
                 """,
-                (int(entitlement["id"]), normalized),
-            ).fetchone() or {}
+                    (int(entitlement["id"]), normalized),
+                ).fetchone()
+                or {}
+            )
             if int(other_active_events.get("total") or 0) <= 0:
                 next_status = "refunded"
                 next_end = now
@@ -1250,13 +1256,14 @@ class PostgresServicePeriodRepository(
         ).fetchone()
         return bool(row)
 
-    def _grant_or_renew_with_unionid(
+    def _grant_or_renew_with_customer(
         self,
         conn: Any,
         *,
         product: dict[str, Any],
         order: dict[str, Any],
         transaction: dict[str, Any],
+        customer_id: int,
         unionid: str,
         out_trade_no: str,
     ) -> dict[str, Any]:
@@ -1270,10 +1277,10 @@ class PostgresServicePeriodRepository(
             FROM service_period_entitlements
             WHERE tenant_id = 'aicrm'
               AND service_product_id = %s
-              AND unionid = %s
+              AND customer_id = %s
             FOR UPDATE
             """,
-            (int(product["id"]), unionid),
+            (int(product["id"]), customer_id),
         ).fetchone()
         before = dict(entitlement) if entitlement else None
         duration_days = int(product.get("duration_days") or 0)
@@ -1324,13 +1331,13 @@ class PostgresServicePeriodRepository(
             updated = conn.execute(
                 """
                 INSERT INTO service_period_entitlements (
-                    tenant_id, service_product_id, trade_product_id, unionid,
+                    tenant_id, service_product_id, trade_product_id, customer_id, unionid,
                     external_userid_snapshot, membership_config_id,
                     status, start_at, end_at, last_order_id, last_out_trade_no,
                     renewal_count, metadata_json, created_at, updated_at
                 )
                 VALUES (
-                    'aicrm', %s, %s, %s, %s, %s,
+                    'aicrm', %s, %s, %s, %s, %s, %s,
                     'active', %s, %s, %s, %s, %s, %s::jsonb,
                     CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
                 )
@@ -1339,6 +1346,7 @@ class PostgresServicePeriodRepository(
                 (
                     int(product["id"]),
                     int(product["trade_product_id"]),
+                    customer_id,
                     unionid,
                     identity["external_userid"],
                     text(product.get("membership_config_id")),
@@ -1362,6 +1370,7 @@ class PostgresServicePeriodRepository(
             before=before,
             after=dict(updated),
             payload={"order": order, "transaction": transaction, "amount_total": int(order.get("amount_total") or 0)},
+            customer_id=customer_id,
         )
         return {"ok": True, "event_type": event_type, "entitlement": self._entitlement_payload(dict(updated)), "event": event}
 
@@ -1379,17 +1388,18 @@ class PostgresServicePeriodRepository(
         before: dict[str, Any] | None,
         after: dict[str, Any] | None,
         payload: dict[str, Any],
+        customer_id: int = 0,
     ) -> dict[str, Any]:
         row = conn.execute(
             """
             INSERT INTO service_period_events (
                 tenant_id, event_id, service_product_id, entitlement_id,
-                trade_product_id, order_id, out_trade_no, unionid, event_type,
+                trade_product_id, order_id, out_trade_no, customer_id, unionid, event_type,
                 duration_days, before_start_at, before_end_at,
                 after_start_at, after_end_at, payload_json, created_at
             )
             VALUES (
-                'aicrm', %s, %s, %s, %s, %s, %s, %s, %s,
+                'aicrm', %s, %s, %s, %s, %s, %s, NULLIF(%s, 0), %s, %s,
                 %s, %s, %s, %s, %s, %s::jsonb, CURRENT_TIMESTAMP
             )
             ON CONFLICT (event_id) DO UPDATE SET event_id = EXCLUDED.event_id
@@ -1402,6 +1412,7 @@ class PostgresServicePeriodRepository(
                 int(product["trade_product_id"]),
                 order.get("id"),
                 out_trade_no,
+                customer_id,
                 unionid,
                 event_type,
                 int(duration_days or 0),
@@ -1413,7 +1424,7 @@ class PostgresServicePeriodRepository(
             ),
         ).fetchone()
         event = dict(row or {})
-        if event_type in {"activated", "renewed", "admin_adjusted"} and text(unionid):
+        if event_type in {"activated", "renewed", "admin_adjusted"} and (customer_id or text(unionid)):
             source_event_id = text(event.get("event_id") or event.get("id"))
             product_title = text(product.get("title") or product.get("name") or product.get("product_code")) or "周期商品"
             enqueue_transactional_internal_event_outbox(
@@ -1422,8 +1433,8 @@ class PostgresServicePeriodRepository(
                     event_type="commerce.product_enrolled",
                     aggregate_type="service_period_event",
                     aggregate_id=source_event_id,
-                    subject_type="unionid",
-                    subject_id=text(unionid),
+                    subject_type="customer" if customer_id else "unionid",
+                    subject_id=text(customer_id or unionid),
                     idempotency_key=f"commerce.product_enrolled:service_period:{source_event_id}",
                     source_module="service_period.repo",
                     source_command_id=source_event_id,
@@ -1441,6 +1452,7 @@ class PostgresServicePeriodRepository(
                             "id": text(event.get("id")),
                             "out_trade_no": text(out_trade_no),
                             "unionid": text(unionid),
+                            "customer_id": customer_id,
                             "product_id": text(product.get("trade_product_id")),
                             "product_code": text(product.get("product_code")),
                             "product_name": product_title,
@@ -1452,7 +1464,8 @@ class PostgresServicePeriodRepository(
                         "service_period_event_id": source_event_id,
                         "event_type": event_type,
                         "product_code": text(product.get("product_code")),
-                        "unionid_present": True,
+                        "unionid_present": bool(text(unionid)),
+                        "customer_id_present": bool(customer_id),
                     },
                 ),
             )

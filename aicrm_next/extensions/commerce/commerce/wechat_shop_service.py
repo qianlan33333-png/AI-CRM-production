@@ -12,6 +12,13 @@ from aicrm_next.integration_ports import (
     WeChatShopClientError,
 )
 from aicrm_next.crm.identity_contact.payment_projection import project_wechat_shop_order_mobile
+from aicrm_next.crm.identity_contact.oneid_repository import (
+    PostgresOneIDService,
+    WECHAT_PROVIDER,
+    WECHAT_UNION_IDENTITY,
+    unionid_scope_key,
+)
+from aicrm_next.platform.shared.postgres_connection import PostgresConnection
 from aicrm_next.platform.platform_foundation.command_bus.models import CommandContext
 from aicrm_next.platform.platform_foundation.internal_events.models import InternalEventCreateRequest
 from aicrm_next.platform.platform_foundation.internal_events.outbox import enqueue_transactional_internal_event_outbox
@@ -111,8 +118,7 @@ def _client() -> WeChatShopClient:
         WeChatShopClientConfig(
             appid=_text(managed_runtime_setting("WECHAT_SHOP_APPID")),
             appsecret=_text(runtime_setting("WECHAT_SHOP_APPSECRET")),
-            api_base=_text(managed_runtime_setting("WECHAT_SHOP_API_BASE"))
-            or "https://api.weixin.qq.com",
+            api_base=_text(managed_runtime_setting("WECHAT_SHOP_API_BASE")) or "https://api.weixin.qq.com",
             timeout_seconds=timeout,
         )
     )
@@ -612,7 +618,9 @@ def _aftersale_counts(aftersale_detail: dict[str, Any], product_infos: list[Any]
             finished += 1
         else:
             processing += 1
-    product_finished = sum(_int(item.get("finish_aftersale_sku_cnt") or item.get("finish_aftersale_sku_count")) for item in product_infos if isinstance(item, dict))
+    product_finished = sum(
+        _int(item.get("finish_aftersale_sku_cnt") or item.get("finish_aftersale_sku_count")) for item in product_infos if isinstance(item, dict)
+    )
     return total, processing, max(finished, product_finished)
 
 
@@ -629,11 +637,7 @@ def _is_virtual_delivery(delivery_info: dict[str, Any], order_detail: dict[str, 
 
 def _buyer_mobile(delivery_info: dict[str, Any]) -> str:
     address_info = delivery_info.get("address_info") if isinstance(delivery_info.get("address_info"), dict) else {}
-    return _text(
-        address_info.get("virtual_order_tel_number")
-        or address_info.get("purchaser_tel_number")
-        or address_info.get("tel_number")
-    )
+    return _text(address_info.get("virtual_order_tel_number") or address_info.get("purchaser_tel_number") or address_info.get("tel_number"))
 
 
 def normalize_wechat_shop_order(order: dict[str, Any], *, raw_response: dict[str, Any] | None = None, order_id: str = "") -> dict[str, Any]:
@@ -847,6 +851,10 @@ def _record_order_error(order_id: str, error: str) -> None:
 def _upsert_order(order: dict[str, Any], *, source_event_id: int | None = None) -> dict[str, Any]:
     order = dict(order)
     order_id = _text(order.get("order_id"))
+    buyer_openid = _text(order.get("openid"))
+    buyer_unionid = _text(order.get("unionid"))
+    if not buyer_unionid:
+        raise RuntimeError("wechat_shop_unionid_required")
     if database_mode() != "postgres":
         existing = dict(_FIXTURE_ORDERS.get(order_id) or {})
         saved = {
@@ -864,12 +872,47 @@ def _upsert_order(order: dict[str, Any], *, source_event_id: int | None = None) 
         _FIXTURE_ORDERS[order_id] = saved
         return deepcopy(saved)
     with _connect() as conn:
+        customer_id = 0
+        buyer_identity_id = 0
+        if buyer_openid:
+            identity_resolution = PostgresOneIDService().ensure_verified_wechat_identity_with_db(
+                PostgresConnection(conn),
+                app_id=_text(managed_runtime_setting("WECHAT_SHOP_APPID")),
+                openid=buyer_openid,
+                unionid=buyer_unionid,
+                source_type="wechat_shop_order",
+                source_event_id=order_id,
+            )
+            if identity_resolution.get("status") == "conflict":
+                raise RuntimeError("wechat_shop_identity_conflict")
+            customer_id = int(identity_resolution.get("customer_id") or 0)
+            buyer_identity_id = int(identity_resolution.get("openid_identity_id") or identity_resolution.get("identity_id") or 0)
+        elif buyer_unionid:
+            ensured = PostgresOneIDService().ensure_verified_identity_with_db(
+                PostgresConnection(conn),
+                provider=WECHAT_PROVIDER,
+                identity_type=WECHAT_UNION_IDENTITY,
+                scope_key=unionid_scope_key(),
+                normalized_value=buyer_unionid,
+                source_type="wechat_shop_order",
+                source_event_id=order_id,
+            )
+            customer_id = ensured.customer_id
+            buyer_identity_id = ensured.identity_id
+        order.update(
+            {
+                "customer_id": customer_id,
+                "buyer_identity_id": buyer_identity_id,
+                "buyer_openid": buyer_openid,
+            }
+        )
         row = conn.execute(
             """
             INSERT INTO wechat_shop_orders (
                 order_id, provider, provider_label, deal_recorded, returned_recorded, business_status,
                 status_code, status_label, paid_at, returned_at, amount_total, refunded_amount_total,
-                currency, transaction_id, payment_method, unionid, product_name, product_code,
+                currency, transaction_id, payment_method, customer_id, buyer_identity_id,
+                buyer_openid, unionid, product_name, product_code,
                 product_count, deliver_method, is_virtual_delivery, virtual_account_no, virtual_account_type,
                 aftersale_order_count, on_aftersale_order_count, finish_aftersale_sku_count, raw_order_json,
                 last_event_type, last_event_at, synced_at, sync_status, last_error, created_at, updated_at
@@ -878,7 +921,8 @@ def _upsert_order(order: dict[str, Any], *, source_event_id: int | None = None) 
                 %(order_id)s, %(provider)s, %(provider_label)s, %(deal_recorded)s, %(returned_recorded)s,
                 %(business_status)s, %(status_code)s, %(status_label)s, %(paid_at)s, %(returned_at)s,
                 %(amount_total)s, %(refunded_amount_total)s, %(currency)s, %(transaction_id)s,
-                %(payment_method)s, %(unionid)s, %(product_name)s, %(product_code)s,
+                %(payment_method)s, NULLIF(%(customer_id)s, 0), NULLIF(%(buyer_identity_id)s, 0),
+                %(buyer_openid)s, %(unionid)s, %(product_name)s, %(product_code)s,
                 %(product_count)s, %(deliver_method)s, %(is_virtual_delivery)s, %(virtual_account_no)s,
                 %(virtual_account_type)s, %(aftersale_order_count)s, %(on_aftersale_order_count)s,
                 %(finish_aftersale_sku_count)s, %(raw_order_json)s, %(last_event_type)s, %(last_event_at)s,
@@ -899,6 +943,9 @@ def _upsert_order(order: dict[str, Any], *, source_event_id: int | None = None) 
                 currency = EXCLUDED.currency,
                 transaction_id = EXCLUDED.transaction_id,
                 payment_method = EXCLUDED.payment_method,
+                customer_id = EXCLUDED.customer_id,
+                buyer_identity_id = EXCLUDED.buyer_identity_id,
+                buyer_openid = EXCLUDED.buyer_openid,
                 unionid = EXCLUDED.unionid,
                 product_name = EXCLUDED.product_name,
                 product_code = EXCLUDED.product_code,
@@ -933,15 +980,15 @@ def _upsert_order(order: dict[str, Any], *, source_event_id: int | None = None) 
             order,
             source_route="wechat_shop_order_sync",
         )
-        if bool(saved.get("deal_recorded")) and _text(saved.get("unionid")):
+        if bool(saved.get("deal_recorded")) and (int(saved.get("customer_id") or 0) or _text(saved.get("unionid"))):
             enqueue_transactional_internal_event_outbox(
                 conn,
                 InternalEventCreateRequest(
                     event_type="commerce.product_enrolled",
                     aggregate_type="wechat_shop_order",
                     aggregate_id=_text(saved.get("order_id") or saved.get("id")),
-                    subject_type="unionid",
-                    subject_id=_text(saved.get("unionid")),
+                    subject_type="customer" if saved.get("customer_id") else "unionid",
+                    subject_id=_text(saved.get("customer_id") or saved.get("unionid")),
                     idempotency_key=f"commerce.product_enrolled:wechat_shop:{_text(saved.get('order_id'))}",
                     source_module="commerce.wechat_shop_service",
                     source_command_id=_text(source_event_id or saved.get("order_id")),
@@ -957,6 +1004,9 @@ def _upsert_order(order: dict[str, Any], *, source_event_id: int | None = None) 
                         "product_type": "wechat_shop",
                         "order": {
                             "order_id": _text(saved.get("order_id")),
+                            "customer_id": int(saved.get("customer_id") or 0),
+                            "buyer_identity_id": int(saved.get("buyer_identity_id") or 0),
+                            "buyer_openid": _text(saved.get("buyer_openid")),
                             "unionid": _text(saved.get("unionid")),
                             "product_code": _text(saved.get("product_code")),
                             "product_name": _text(saved.get("product_name")),
@@ -967,7 +1017,8 @@ def _upsert_order(order: dict[str, Any], *, source_event_id: int | None = None) 
                     payload_summary={
                         "order_id": _text(saved.get("order_id")),
                         "product_code": _text(saved.get("product_code")),
-                        "unionid_present": True,
+                        "unionid_present": bool(_text(saved.get("unionid"))),
+                        "customer_id_present": bool(saved.get("customer_id")),
                     },
                 ),
             )
@@ -1284,7 +1335,9 @@ def create_wechat_shop_refund_request(order_id: str, payload: dict[str, Any]) ->
     operator = _text(payload.get("operator")) or "aicrm_next"
     out_refund_no = _out_refund_no()
     request_payload = _wechat_shop_refund_request_payload(order or {}, out_refund_no=out_refund_no, amount_total=amount_total, reason=reason)
-    _insert_refund_record(order or {}, out_refund_no=out_refund_no, amount_total=amount_total, reason=reason, operator=operator, request_payload=request_payload)
+    _insert_refund_record(
+        order or {}, out_refund_no=out_refund_no, amount_total=amount_total, reason=reason, operator=operator, request_payload=request_payload
+    )
     try:
         token = _get_access_token()
         response_payload = _client().gen_after_sale_order(request_payload, token)
@@ -1320,7 +1373,9 @@ def create_wechat_shop_refund_request(order_id: str, payload: dict[str, Any]) ->
     updated_order = dict(updated_order or {})
     updated_order["active_refund_amount_total"] = _int(updated_order.get("active_refund_amount_total")) or amount_total
     updated_order["active_refund_amount_yuan"] = f"{_int(updated_order.get('active_refund_amount_total')) / 100:.2f}"
-    updated_order["refundable_amount_total"] = max(0, _int(updated_order.get("amount_total")) - _int(updated_order.get("refunded_amount_total")) - _int(updated_order.get("active_refund_amount_total")))
+    updated_order["refundable_amount_total"] = max(
+        0, _int(updated_order.get("amount_total")) - _int(updated_order.get("refunded_amount_total")) - _int(updated_order.get("active_refund_amount_total"))
+    )
     updated_order["refundable_amount_yuan"] = f"{_int(updated_order.get('refundable_amount_total')) / 100:.2f}"
     updated_order["can_refund"] = False
     updated_order["status"] = "refund_processing"

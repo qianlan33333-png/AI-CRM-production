@@ -57,6 +57,7 @@ from .repo_support import (
 )
 from .repo_memory import InMemoryQuestionnaireRepository
 
+
 class PostgresQuestionnaireReadRepository:
     source_status = "next_read_model"
     read_model_status = "primary"
@@ -828,11 +829,41 @@ class PostgresQuestionnaireReadRepository:
             openid=_text(payload.get("openid") or respondent_identity.get("openid")) or None,
             mobile=mobile_snapshot or None,
         )
+        customer_id = int(payload.get("customer_id") or respondent_identity.get("customer_id") or 0)
+        respondent_identity_id = int(payload.get("respondent_identity_id") or respondent_identity.get("respondent_identity_id") or 0)
         with self._connect() as identity_conn:
             identity_resolution = resolve_identity_with_dbapi(identity_conn, requested_identity)
+            if customer_id or respondent_identity_id:
+                trusted_identity = identity_conn.execute(
+                    """
+                    SELECT identity.id AS identity_id,
+                           aicrm_customer_root_id(identity.customer_id) AS customer_id
+                    FROM customer_identities identity
+                    WHERE identity.id = %s AND identity.status = 'active'
+                    LIMIT 1
+                    """,
+                    (respondent_identity_id,),
+                ).fetchone()
+                if not trusted_identity or int(trusted_identity.get("customer_id") or 0) != customer_id:
+                    raise ContractError("questionnaire_identity_invalid")
+            elif requested_identity.external_userid:
+                customer_row = identity_conn.execute(
+                    """
+                    SELECT COALESCE(root.id, customer.id) AS customer_id
+                    FROM wecom_external_contact_identity_map identity_map
+                    JOIN customers customer ON customer.id = identity_map.customer_id
+                    LEFT JOIN customers root ON root.id = customer.merged_into_customer_id
+                    WHERE identity_map.external_userid = %s
+                      AND identity_map.status = 'active'
+                    ORDER BY identity_map.updated_at DESC, identity_map.id DESC
+                    LIMIT 1
+                    """,
+                    (requested_identity.external_userid,),
+                ).fetchone()
+                customer_id = int((customer_row or {}).get("customer_id") or 0)
         unionid = resolved_unionid(identity_resolution)
         resolution_queue_payload: dict[str, Any] | None = None
-        if not unionid:
+        if not unionid and not customer_id:
             resolution_queue_payload = {
                 "source_type": "questionnaire_submission",
                 "questionnaire_id": questionnaire_id,
@@ -864,21 +895,32 @@ class PostgresQuestionnaireReadRepository:
         submission: dict[str, Any] = {}
         with self._connect() as conn:
             with conn.transaction():
-                if unionid:
-                    lock_key = f"questionnaire_submission:{questionnaire_id}:{unionid}"
+                if customer_id or unionid:
+                    lock_key = f"questionnaire_submission:{questionnaire_id}:{customer_id or unionid}"
                     conn.execute(
                         "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
                         (lock_key,),
                     )
-                    existing = conn.execute(
-                        """
-                        SELECT id
-                        FROM questionnaire_submissions
-                        WHERE questionnaire_id = %s AND unionid = %s
-                        LIMIT 1
-                        """,
-                        (questionnaire_id, unionid),
-                    ).fetchone()
+                    if customer_id:
+                        existing = conn.execute(
+                            """
+                            SELECT id
+                            FROM questionnaire_submissions
+                            WHERE questionnaire_id = %s AND customer_id = %s
+                            LIMIT 1
+                            """,
+                            (questionnaire_id, customer_id),
+                        ).fetchone()
+                    else:
+                        existing = conn.execute(
+                            """
+                            SELECT id
+                            FROM questionnaire_submissions
+                            WHERE questionnaire_id = %s AND unionid = %s
+                            LIMIT 1
+                            """,
+                            (questionnaire_id, unionid),
+                        ).fetchone()
                     if existing:
                         raise ContractError("already_submitted")
                 if resolution_queue_payload is not None:
@@ -890,14 +932,17 @@ class PostgresQuestionnaireReadRepository:
                 row = conn.execute(
                     """
                     INSERT INTO questionnaire_submissions (
-                        questionnaire_id, unionid, follow_user_userid, source_channel, campaign_id,
+                        questionnaire_id, customer_id, respondent_identity_id, unionid,
+                        follow_user_userid, source_channel, campaign_id,
                         staff_id, total_score, final_tags, assessment_result_snapshot, result_token, submitted_at
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+                    VALUES (%s, NULLIF(%s, 0), NULLIF(%s, 0), %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
                     RETURNING id, submitted_at
                     """,
                     (
                         questionnaire_id,
+                        customer_id,
+                        respondent_identity_id,
                         unionid or "",
                         _text(payload.get("follow_user_userid")),
                         _text(source.get("source_channel")),
@@ -939,6 +984,8 @@ class PostgresQuestionnaireReadRepository:
                     "submission_id": str(submission_id),
                     "result_token": _text(payload.get("result_token")),
                     "questionnaire_id": questionnaire_id,
+                    "customer_id": customer_id,
+                    "respondent_identity_id": respondent_identity_id,
                     "slug": _text(payload.get("slug")),
                     "answers": answers,
                     "answers_json": answers,
@@ -1066,15 +1113,48 @@ class PostgresQuestionnaireReadRepository:
         }
 
     def find_submission_for_identity(self, questionnaire_id: int, identity: dict[str, Any]) -> dict[str, Any] | None:
+        customer_id = int(identity.get("customer_id") or 0)
         request = ResolvePersonIdentityRequest(
             unionid=_text(identity.get("unionid")) or None,
             external_userid=_text(identity.get("external_userid")) or None,
             openid=_text(identity.get("openid")) or None,
             mobile=_text(identity.get("mobile")) or None,
         )
-        if not any((request.unionid, request.external_userid, request.openid, request.mobile)):
+        if not customer_id and not any((request.unionid, request.external_userid, request.openid, request.mobile)):
             return None
         with self._connect() as conn:
+            if customer_id:
+                root_customer_id = conn.execute(
+                    "SELECT aicrm_customer_root_id(%s) AS customer_id",
+                    (customer_id,),
+                ).fetchone()
+                row = conn.execute(
+                    """
+                    SELECT qs.id, qs.questionnaire_id, '' AS respondent_key,
+                           COALESCE(identity.primary_openid, '') AS openid,
+                           qs.unionid,
+                           COALESCE(identity.primary_external_userid, '') AS external_userid,
+                           COALESCE(identity.mobile, '') AS mobile_snapshot,
+                           qs.total_score, qs.final_tags, qs.result_token,
+                           '' AS redirect_url_snapshot,
+                           qs.submitted_at
+                    FROM questionnaire_submissions qs
+                    LEFT JOIN crm_user_identity identity ON identity.customer_id = qs.customer_id
+                    WHERE qs.questionnaire_id = %s AND qs.customer_id = %s
+                    ORDER BY qs.submitted_at DESC, qs.id DESC
+                    LIMIT 1
+                    """,
+                    (int(questionnaire_id), int((root_customer_id or {}).get("customer_id") or customer_id)),
+                ).fetchone()
+                if row:
+                    return {
+                        **dict(row),
+                        "submission_id": str(row.get("id")),
+                        "mobile": _text(row.get("mobile_snapshot")),
+                        "score": float(row.get("total_score") or 0),
+                        "final_tags": _json_list(row.get("final_tags")),
+                        "submitted_at": _timestamp(row.get("submitted_at")),
+                    }
             resolution = resolve_identity_with_dbapi(conn, request)
             unionid = resolved_unionid(resolution)
             if not unionid:
@@ -1214,6 +1294,7 @@ class PostgresQuestionnaireReadRepository:
 
 
 _DEFAULT_REPO = InMemoryQuestionnaireRepository()
+
 
 def build_questionnaire_repository() -> QuestionnaireRepository:
     if production_data_ready():

@@ -72,6 +72,8 @@
     sidebar_owner_token_status: "",
     sidebar_oauth_url: "",
     sidebar_oauth_started: false,
+    provisioning_sync_token: "",
+    provisioning_retry_timer: null,
     activeTab: "profile",
     profileView: "basic",
     materialType: "image",
@@ -445,6 +447,10 @@
         skipSidebarTokenRecovery: true,
       });
       const applied = applySidebarOwnerToken(payload, key);
+      if (String(payload.context_status || "").trim() === "provisioning") {
+        state.provisioning_sync_token = String(payload.sync_token || "").trim();
+        scheduleProvisioningRetry(Number(payload.retry_after || 2));
+      }
       writeDebug("sidebar owner token refreshed", {
         status: state.sidebar_owner_token_status,
         has_token: Boolean(state.sidebar_owner_token),
@@ -541,6 +547,23 @@
 
   function sleep(ms) {
     return new Promise((resolve) => window.setTimeout(resolve, ms));
+  }
+
+  function scheduleProvisioningRetry(retryAfterSeconds) {
+    window.clearTimeout(state.provisioning_retry_timer);
+    const delay = Math.max(1, Math.min(Number(retryAfterSeconds) || 2, 30)) * 1000;
+    state.provisioning_retry_timer = window.setTimeout(() => boot(), delay);
+  }
+
+  function renderProvisioning() {
+    setWorkbenchState(WORKBENCH_STATES.identifying_customer, { context_status: "provisioning" });
+    renderTop();
+    renderTabs();
+    content.innerHTML = panel(
+      "核心画像",
+      '<div class="status">正在核验企微客户关系，客户身份建立后会自动打开。</div>' +
+        '<div class="row-actions"><button class="btn primary" type="button" data-retry-boot>立即重试</button></div>'
+    );
   }
 
   function shouldRetryRequest(error) {
@@ -2072,6 +2095,11 @@
         return;
       }
       if (!state.sidebar_owner_token) {
+        if (state.sidebar_owner_token_status === "provisioning") {
+          renderProvisioning();
+          scheduleProvisioningRetry(2);
+          return;
+        }
         if (await maybeStartSidebarOAuth("owner_token_missing", { force: forceSidebarOAuth })) return;
         setWorkbenchState(WORKBENCH_STATES.error, { message: "sidebar authorization required" });
         renderRetryPanel("", "侧边栏授权未完成，请点击重试重新授权。");

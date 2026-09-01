@@ -14,8 +14,8 @@
   },
   "migration_contract": {
     "directory": "migrations/versions",
-    "expected_file_count": 181,
-    "expected_head": "0171_user_ops_send_seq"
+    "expected_file_count": 183,
+    "expected_head": "0173_oneid_business_references"
   },
   "allowed_test_side_effects": [
     "none",

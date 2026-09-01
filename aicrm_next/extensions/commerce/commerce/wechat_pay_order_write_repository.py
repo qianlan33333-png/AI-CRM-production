@@ -14,11 +14,12 @@ class PostgresWeChatPayOrderWriteRepository:
             """
             INSERT INTO wechat_pay_orders (
                 out_trade_no, order_source, product_code, product_name, description,
-                amount_total, currency, unionid, payer_name_snapshot, status, success_url, metadata_json,
+                amount_total, currency, customer_id, payer_identity_id, unionid,
+                payer_name_snapshot, status, success_url, metadata_json,
                 request_meta_json, expires_at, client_order_ref, created_at, updated_at
             )
             VALUES (
-                %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
                 'created', %s, %s::jsonb, %s::jsonb, %s::timestamptz, %s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
             )
             RETURNING *
@@ -31,6 +32,8 @@ class PostgresWeChatPayOrderWriteRepository:
                 request.description,
                 int(request.amount_total),
                 request.currency,
+                int(request.customer_id),
+                int(request.payer_identity_id),
                 request.unionid,
                 request.payer_name_snapshot,
                 request.success_url,

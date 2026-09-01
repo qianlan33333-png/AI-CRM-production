@@ -12,6 +12,8 @@ from aicrm_next.platform.shared.signed_context import (
     validate_sidebar_owner_context,
 )
 from aicrm_next.platform.shared.runtime_settings import managed_runtime_setting
+from aicrm_next.platform.shared.runtime import database_mode
+from aicrm_next.crm.identity_contact.repo import FixtureIdentityRepository, PostgresIdentityRepository
 
 from .application import (
     SidebarWriteConflictError,
@@ -134,6 +136,7 @@ def _trusted_sidebar_context(request: Request, *, external_userid: str) -> dict[
     if context:
         if str(context.get("external_userid") or "").strip() != str(external_userid or "").strip():
             raise SidebarWriteForbiddenError("sidebar customer scope forbidden")
+        _require_active_relationship(context)
         return context
     result = validate_sidebar_owner_context(
         token=str(request.headers.get("X-AICRM-Sidebar-Owner-Token") or "").strip(),
@@ -143,7 +146,19 @@ def _trusted_sidebar_context(request: Request, *, external_userid: str) -> dict[
     )
     if not result.get("ok"):
         raise SidebarWriteForbiddenError("sidebar context required")
-    return dict(result.get("context") or {})
+    context = dict(result.get("context") or {})
+    _require_active_relationship(context)
+    return context
+
+
+def _require_active_relationship(context: dict[str, Any]) -> None:
+    repository = PostgresIdentityRepository() if database_mode() == "postgres" else FixtureIdentityRepository()
+    if not repository.has_active_follow_relation(
+        corp_id=str(context.get("corp_id") or managed_runtime_setting("WECOM_CORP_ID") or "").strip(),
+        user_id=str(context.get("owner_userid") or context.get("viewer_userid") or "").strip(),
+        external_userid=str(context.get("external_userid") or "").strip(),
+    ):
+        raise SidebarWriteForbiddenError("sidebar customer scope forbidden")
 
 
 def _idempotency_key(request: Request, body: dict[str, Any]) -> str:

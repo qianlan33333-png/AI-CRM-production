@@ -9,6 +9,12 @@ from typing import Any, Callable, Protocol
 from aicrm_next.platform.platform_foundation.job_runs import FinishJobRunRequest, StartJobRunRequest, build_job_run_ledger_port
 
 from aicrm_next.crm.identity_contact.resolver import resolve_external_userid_with_dbapi
+from aicrm_next.crm.identity_contact.oneid_repository import (
+    PostgresOneIDService,
+    WECOM_EXTERNAL_IDENTITY,
+    WECOM_PROVIDER,
+)
+from aicrm_next.platform.shared.postgres_connection import PostgresConnection
 from aicrm_next.crm.identity_contact.resolution_queue_port import (
     EnqueueIdentityResolutionRequest,
     build_identity_resolution_queue_port,
@@ -196,11 +202,7 @@ class FixtureMessageArchiveRepository:
         limit: int | None = None,
         offset: int = 0,
     ) -> list[JsonDict]:
-        rows = [
-            row
-            for row in self.list_messages(external_userid, chat_type=chat_type, limit=None, offset=0)
-            if keyword in str(row.get("content") or "")
-        ]
+        rows = [row for row in self.list_messages(external_userid, chat_type=chat_type, limit=None, offset=0) if keyword in str(row.get("content") or "")]
         return _page(rows, limit=limit, offset=offset)
 
     def list_external_chat_records(
@@ -216,9 +218,7 @@ class FixtureMessageArchiveRepository:
         rows = [
             deepcopy(row)
             for row in self._messages
-            if row.get("external_userid") == external_userid
-            and _message_scene(row) == chat_scene
-            and _message_after_start(row, start_time)
+            if row.get("external_userid") == external_userid and _message_scene(row) == chat_scene and _message_after_start(row, start_time)
         ]
         if chat_scene == "private" and with_userid:
             rows = [row for row in rows if _message_matches_with_user(row, with_userid)]
@@ -432,19 +432,32 @@ class PostgresArchiveSyncRepository:
         with self._connect() as conn:
             try:
                 for message in messages:
+                    external_userid = str(message.get("external_userid") or "").strip()
+                    customer_id = 0
+                    customer_identity_id = 0
+                    if external_userid:
+                        identity = PostgresOneIDService().ensure_verified_identity_with_db(
+                            PostgresConnection(conn),
+                            provider=WECOM_PROVIDER,
+                            identity_type=WECOM_EXTERNAL_IDENTITY,
+                            scope_key=runtime_setting("WECOM_CORP_ID", "").strip(),
+                            normalized_value=external_userid,
+                            source_type="wecom_message_archive",
+                            source_event_id=str(message.get("msgid") or "").strip(),
+                        )
+                        customer_id = identity.customer_id
+                        customer_identity_id = identity.identity_id
                     unionid = str(message.get("unionid") or "").strip()
                     if not unionid:
-                        unionid = resolve_external_userid_with_dbapi(conn, str(message.get("external_userid") or "").strip())
-                    if not unionid:
-                        _enqueue_archive_identity_resolution(conn, message)
-                        continue
+                        unionid = resolve_external_userid_with_dbapi(conn, external_userid)
                     row = conn.execute(
                         """
                         INSERT INTO archived_messages (
-                            seq, msgid, chat_type, unionid, owner_userid, sender, receiver,
+                            seq, msgid, chat_type, customer_id, customer_identity_id,
+                            external_userid, unionid, owner_userid, sender, receiver,
                             msgtype, content, send_time, raw_payload
                         )
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        VALUES (%s, %s, %s, NULLIF(%s, 0), NULLIF(%s, 0), %s, %s, %s, %s, %s, %s, %s, %s, %s)
                         ON CONFLICT (msgid) DO NOTHING
                         RETURNING id
                         """,
@@ -452,6 +465,9 @@ class PostgresArchiveSyncRepository:
                             int(message.get("seq") or 0),
                             str(message.get("msgid") or ""),
                             str(message.get("chat_type") or "private"),
+                            customer_id,
+                            customer_identity_id,
+                            external_userid,
                             unionid,
                             str(message.get("owner_userid") or ""),
                             str(message.get("sender") or ""),

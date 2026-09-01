@@ -12,6 +12,7 @@ class SaveSidebarProfileFieldsRequest:
     industry_description: str
     needs_blockers_followup: str
     updated_by: str
+    customer_id: int = 0
 
 
 class SidebarCustomerProfileProjectionPort(Protocol):

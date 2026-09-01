@@ -33,7 +33,7 @@ class IdentityResolveResult(Protocol):
 
 
 IdentityResolutionBackfillOutcome = Literal["resolved", "retryable", "failed"]
-IdentityResolutionCompletionStatus = Literal["resolved", "conflict"]
+IdentityResolutionCompletionStatus = Literal["resolved", "conflict", "pending", "ignored"]
 
 
 @dataclass(frozen=True)
@@ -131,6 +131,9 @@ class ChannelCrmDependencies:
     customer_tag_projection_factory: Callable[[], CustomerTagProjectionPort]
     plan_identity_resolution_effect: Callable[..., dict[str, Any]]
     enqueue_channel_entry_identity_resolution_in_connection: Callable[..., dict[str, Any]]
+    ensure_verified_wecom_customer: Callable[..., dict[str, Any]]
+    apply_verified_wecom_detail: Callable[..., dict[str, Any]]
+    close_verified_wecom_relationship: Callable[..., dict[str, Any]]
 
 
 _DEPENDENCIES: ChannelCrmDependencies | None = None
@@ -237,6 +240,18 @@ def enqueue_channel_entry_identity_resolution_in_connection(
     )
 
 
+def ensure_verified_wecom_customer(**kwargs: Any) -> dict[str, Any]:
+    return _dependencies().ensure_verified_wecom_customer(**kwargs)
+
+
+def apply_verified_wecom_detail(**kwargs: Any) -> dict[str, Any]:
+    return _dependencies().apply_verified_wecom_detail(**kwargs)
+
+
+def close_verified_wecom_relationship(**kwargs: Any) -> dict[str, Any]:
+    return _dependencies().close_verified_wecom_relationship(**kwargs)
+
+
 __all__ = [
     "ChannelCrmDependencies",
     "CompleteIdentityResolutionRequest",
@@ -250,6 +265,9 @@ __all__ = [
     "build_identity_resolution_queue_port",
     "configure_channel_crm_port",
     "enqueue_channel_entry_identity_resolution_in_connection",
+    "ensure_verified_wecom_customer",
+    "apply_verified_wecom_detail",
+    "close_verified_wecom_relationship",
     "plan_identity_resolution_effect",
     "resolve_external_userid_with_dbapi",
     "resolve_identity_with_dbapi",

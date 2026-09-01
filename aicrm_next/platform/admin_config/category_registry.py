@@ -74,6 +74,8 @@ CONFIG_CATEGORIES: tuple[ConfigCategory, ...] = (
         check_supported=True,
         sort_order=30,
         fields=(
+            field("AICRM_ONEID_READ_ENABLED"),
+            field("WECHAT_OPEN_PLATFORM_SCOPE_ID"),
             field("SIDEBAR_PRODUCT_CONTEXT_TOKEN_TTL_SECONDS"),
             field("SIDEBAR_CONTEXT_TOKEN_TTL_SECONDS"),
             field("AICRM_SIDEBAR_JSSDK_ADAPTER_MODE", block_title="企微 JSSDK"),
@@ -203,6 +205,7 @@ CONFIG_CATEGORIES: tuple[ConfigCategory, ...] = (
         fields=(
             field("WECHAT_PAY_ENABLED"),
             field("WECHAT_PAY_APP_ID"),
+            field("WECHAT_PAY_APP_SECRET", block_title="密钥"),
             field("WECHAT_PAY_MCH_ID"),
             field("WECHAT_PAY_API_V3_KEY", block_title="密钥"),
             field("WECHAT_PAY_PRIVATE_KEY_PATH", block_title="密钥"),

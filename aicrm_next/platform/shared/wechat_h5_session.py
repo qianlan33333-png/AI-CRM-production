@@ -26,10 +26,7 @@ def _text(value: Any) -> str:
 
 
 def _secret() -> str:
-    configured = (
-        _text(runtime_setting("AICRM_NEXT_ACTION_TOKEN_SECRET"))
-        or _text(runtime_setting("SECRET_KEY"))
-    )
+    configured = _text(runtime_setting("AICRM_NEXT_ACTION_TOKEN_SECRET")) or _text(runtime_setting("SECRET_KEY"))
     if configured:
         return configured
     if production_environment():
@@ -52,14 +49,18 @@ def sign_payment_session_payload(payload: dict[str, Any]) -> str:
         issued_at = int(effective_payload.get("iat") or time.time())
         effective_payload["iat"] = issued_at
         effective_payload.setdefault("exp", issued_at + WECHAT_PAYMENT_IDENTITY_TTL_SECONDS)
-    encoded = base64.urlsafe_b64encode(
-        json.dumps(
-            effective_payload,
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode("utf-8")
-    ).decode("ascii").rstrip("=")
+    encoded = (
+        base64.urlsafe_b64encode(
+            json.dumps(
+                effective_payload,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        )
+        .decode("ascii")
+        .rstrip("=")
+    )
     secret = _secret()
     if not secret:
         raise RuntimeError("h5_payment_session_secret_required")
@@ -157,6 +158,9 @@ def payment_identity_from_request(request: Request) -> dict[str, str]:
         return {}
     return {
         "openid": openid,
+        "app_id": _text(payload.get("app_id")),
+        "customer_id": _text(payload.get("customer_id")),
+        "payer_identity_id": _text(payload.get("payer_identity_id")),
         "unionid": _text(payload.get("unionid")),
         "respondent_key": _text(payload.get("respondent_key")),
         "external_userid": _text(payload.get("external_userid")),

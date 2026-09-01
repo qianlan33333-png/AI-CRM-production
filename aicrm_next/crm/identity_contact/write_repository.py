@@ -132,6 +132,19 @@ class PostgresIdentityWriteRepository:
         bind_by_userid: str,
     ) -> dict[str, Any]:
         source_key = f"sidebar_bind_mobile:{external_userid}:{command_id}"
+        identity_context = conn.execute(
+            """
+            SELECT customer_id, identity_id
+            FROM wecom_external_contact_identity_map
+            WHERE external_userid = %s
+              AND status = 'active'
+            ORDER BY updated_at DESC
+            LIMIT 1
+            """,
+            (external_userid,),
+        ).fetchone()
+        customer_id = (identity_context or {}).get("customer_id")
+        identity_id = (identity_context or {}).get("identity_id")
         cursor = conn.execute(
             """
             INSERT INTO crm_user_identity_resolution_queue (
@@ -139,6 +152,9 @@ class PostgresIdentityWriteRepository:
                 source_key,
                 external_userid,
                 mobile,
+                customer_id,
+                identity_id,
+                enrichment_status,
                 payload_json,
                 reason,
                 status,
@@ -148,11 +164,14 @@ class PostgresIdentityWriteRepository:
                 created_at,
                 updated_at
             )
-            VALUES ('sidebar_bind_mobile', %s, %s, %s, CAST(%s AS jsonb), 'missing_unionid', 'pending', NOW(), NOW(), NOW(), NOW(), NOW())
+            VALUES ('sidebar_bind_mobile', %s, %s, %s, %s, %s, 'pending', CAST(%s AS jsonb), 'missing_unionid', 'pending', NOW(), NOW(), NOW(), NOW(), NOW())
             ON CONFLICT (source_type, source_key) WHERE status = 'pending' AND source_type <> '' AND source_key <> ''
             DO UPDATE SET
                 external_userid = COALESCE(NULLIF(EXCLUDED.external_userid, ''), crm_user_identity_resolution_queue.external_userid),
                 mobile = COALESCE(NULLIF(EXCLUDED.mobile, ''), crm_user_identity_resolution_queue.mobile),
+                customer_id = COALESCE(EXCLUDED.customer_id, crm_user_identity_resolution_queue.customer_id),
+                identity_id = COALESCE(EXCLUDED.identity_id, crm_user_identity_resolution_queue.identity_id),
+                enrichment_status = 'pending',
                 payload_json = crm_user_identity_resolution_queue.payload_json || EXCLUDED.payload_json,
                 reason = EXCLUDED.reason,
                 last_seen_at = NOW(),
@@ -163,6 +182,8 @@ class PostgresIdentityWriteRepository:
                 source_key,
                 external_userid,
                 mobile,
+                customer_id,
+                identity_id,
                 json.dumps(
                     {
                         "external_userid": external_userid,

@@ -75,14 +75,14 @@ def service_period_entitlement_consumer(event: InternalEvent, run: InternalEvent
             error_message="order is not paid yet",
             retry_after_seconds=300,
         )
-    if result.get("reason") == "missing_unionid":
+    if result.get("reason") in {"missing_unionid", "missing_customer_id"}:
         return InternalEventConsumerResult(
             status="failed_retryable",
             request_summary={"event_id": event.event_id, "out_trade_no": out_trade_no},
-            response_summary={"skipped": True, "reason": "missing_unionid"},
-            result_summary={"event_type": "grant_failed_missing_unionid", "out_trade_no": out_trade_no},
-            error_code="missing_unionid",
-            error_message="canonical unionid is required before service entitlement can be granted",
+            response_summary={"skipped": True, "reason": "missing_customer_id"},
+            result_summary={"event_type": "grant_failed_missing_customer_id", "out_trade_no": out_trade_no},
+            error_code="missing_customer_id",
+            error_message="canonical customer_id is required before service entitlement can be granted",
             retry_after_seconds=900,
         )
     if not result.get("ok", False):

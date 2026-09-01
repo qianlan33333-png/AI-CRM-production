@@ -226,12 +226,61 @@ def enqueue_channel_entry_identity_resolution_in_connection(
             _text(reason) or "identity_pending_unionid",
         ),
     ).fetchone()
+    if row:
+        row = connection.execute(
+            """
+            UPDATE crm_user_identity_resolution_queue queue
+            SET customer_id = identity_map.customer_id,
+                identity_id = identity_map.identity_id,
+                enrichment_status = CASE
+                    WHEN queue.status = 'resolved' THEN 'resolved'
+                    WHEN queue.status = 'conflict' THEN 'conflict'
+                    ELSE 'pending'
+                END,
+                updated_at = NOW()
+            FROM wecom_external_contact_identity_map identity_map
+            WHERE queue.id = %s
+              AND identity_map.corp_id = queue.corp_id
+              AND identity_map.external_userid = queue.external_userid
+            RETURNING queue.*
+            """,
+            (int(row.get("id") or 0),),
+        ).fetchone() or row
     return plan_identity_resolution_effect(
         connection,
         dict(row or {}),
         parent_execution_id=parent_execution_id,
         source_route="channel_entry.identity_resolution.enqueue",
     )
+
+
+def enqueue_sidebar_identity_verification(
+    *,
+    corp_id: str,
+    external_userid: str,
+    owner_userid: str,
+) -> dict[str, Any]:
+    """Queue provider verification for an OAuth/JSSDK-derived sidebar context."""
+
+    from .repo import open_identity_connection
+
+    with open_identity_connection() as connection:
+        planned = enqueue_channel_entry_identity_resolution_in_connection(
+            connection,
+            corp_id=corp_id,
+            external_userid=external_userid,
+            follow_user_userid=owner_userid,
+            payload_json={
+                "Event": "change_external_contact",
+                "ChangeType": "edit_external_contact",
+                "ExternalUserID": external_userid,
+                "UserID": owner_userid,
+                "source": "sidebar_trusted_context_verification",
+            },
+            reason="sidebar_relationship_verification_required",
+        )
+        connection.commit()
+        return planned
 
 
 def _link_queue_effect(

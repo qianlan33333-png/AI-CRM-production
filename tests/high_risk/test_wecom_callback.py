@@ -9,6 +9,7 @@ from aicrm_next.channels.channel_entry.inbox import (
     ingest_wecom_callback,
     wecom_callback_idempotency_key,
 )
+from aicrm_next.channels.channel_entry.identity_bridge_service import IdentityBridgeService
 from aicrm_next.platform.platform_foundation.webhook_inbox.repository import InMemoryWebhookInboxRepository
 
 
@@ -23,6 +24,25 @@ CURRENT_EVENT = {
     "CreateTime": "1800000000",
     "WelcomeCode": "welcome-current",
 }
+
+
+def test_provider_detail_cannot_create_identity_without_the_current_employee_relationship() -> None:
+    class UnexpectedRepository:
+        def normalize_external_contact_identity(self, *_args, **_kwargs):
+            raise AssertionError("unverified provider detail must not reach identity persistence")
+
+    result = IdentityBridgeService(repository=UnexpectedRepository())._sync_external_contact_identity_for_detail(
+        detail_payload={
+            "external_contact": {"external_userid": "wm-forged"},
+            "follow_user": [{"userid": "another-owner"}],
+        },
+        external_userid="wm-forged",
+        owner_userid="current-owner",
+        corp_id="corp-1",
+    )
+
+    assert result["status"] == "failed"
+    assert result["reason"] == "provider_relationship_mismatch"
 
 
 def _ingest_current_callback(repository: InMemoryWebhookInboxRepository) -> dict[str, object]:

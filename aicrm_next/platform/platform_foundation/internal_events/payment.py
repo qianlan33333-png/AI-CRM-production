@@ -32,9 +32,7 @@ PAYMENT_SUCCEEDED_CORE_CONSUMERS = (
     "dnd_policy_consumer",
     "ai_assist_notify_consumer",
 )
-PAYMENT_SUCCEEDED_PRODUCTION_EVENT_CONSUMERS = tuple(
-    f"{PAYMENT_SUCCEEDED_EVENT_TYPE}:{consumer_name}" for consumer_name in PAYMENT_SUCCEEDED_CORE_CONSUMERS
-)
+PAYMENT_SUCCEEDED_PRODUCTION_EVENT_CONSUMERS = tuple(f"{PAYMENT_SUCCEEDED_EVENT_TYPE}:{consumer_name}" for consumer_name in PAYMENT_SUCCEEDED_CORE_CONSUMERS)
 PaymentIdentityProjector = Callable[..., dict[str, Any]]
 
 
@@ -59,7 +57,8 @@ def build_payment_succeeded_event_request(
     if not out_trade_no or not aggregate_id:
         return None
     subject_id = (
-        _text(order.get("unionid"))
+        _text(order.get("customer_id"))
+        or _text(order.get("unionid"))
         or _text(order.get("external_userid"))
         or _text(order.get("userid_snapshot"))
         or _text(order.get("respondent_key"))
@@ -94,6 +93,7 @@ def build_payment_succeeded_event_request(
             "aggregate_id": aggregate_id,
             "subject_type": "customer",
             "subject_id": subject_id,
+            "customer_id": order.get("customer_id"),
             "product_code": order.get("product_code"),
             "amount_total": int(order.get("amount_total") or order.get("payer_total") or 0),
             "status": order.get("status"),

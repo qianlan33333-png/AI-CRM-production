@@ -28,6 +28,7 @@ def build_questionnaire_submitted_event_request(
     if not submission_id or not questionnaire_id:
         return None
     unionid = _text(submission.get("unionid"))
+    customer_id = _text(submission.get("customer_id"))
     external_push_config = _external_push_config(questionnaire)
     questionnaire_payload = {
         "id": int(questionnaire_id),
@@ -38,6 +39,8 @@ def build_questionnaire_submitted_event_request(
     }
     submission_payload = {
         "submission_id": submission_id,
+        "customer_id": customer_id,
+        "respondent_identity_id": _text(submission.get("respondent_identity_id")),
         "questionnaire_id": int(questionnaire_id),
         "slug": _text(submission.get("slug") or questionnaire.get("slug")),
         "respondent_key": _text(submission.get("respondent_key")),
@@ -56,8 +59,8 @@ def build_questionnaire_submitted_event_request(
         event_version=1,
         aggregate_type="questionnaire_submission",
         aggregate_id=submission_id,
-        subject_type="unionid" if unionid else "questionnaire_submission",
-        subject_id=unionid or submission_id,
+        subject_type="customer" if customer_id else "unionid" if unionid else "questionnaire_submission",
+        subject_id=customer_id or unionid or submission_id,
         idempotency_key=f"questionnaire.submitted:{submission_id}",
         source_module="questionnaire.h5_write",
         source_command_id=_text(source_command_id) or submission_id,
@@ -76,6 +79,7 @@ def build_questionnaire_submitted_event_request(
             "answer_count": len(snapshots),
             "final_tag_count": len(submission_payload["final_tags"]),
             "unionid_present": bool(unionid),
+            "customer_id_present": bool(customer_id),
             "external_push_configured": bool(questionnaire_payload["external_push_enabled"] and _target_url(questionnaire_payload)),
         },
     )

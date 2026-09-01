@@ -28,6 +28,7 @@ from .domain import (
     text,
 )
 from .identity_bridge import sync_external_contact_identity_for_event
+from .crm_port import ensure_verified_wecom_customer, close_verified_wecom_relationship
 from .schemas import (
     DiagnoseChannelRuntimeQuery,
     GenerateChannelQrCodeCommand,
@@ -992,6 +993,17 @@ def process_wecom_external_contact_event(
     try:
         is_entry_event = text(event.get("Event")) == "change_external_contact" and text(event.get("ChangeType")) in ENTRY_CHANGE_TYPES
         if is_entry_event:
+            external_userid = text(event.get("ExternalUserID"))
+            owner_userid = text(event.get("UserID"))
+            if not external_userid or not owner_userid:
+                raise ValueError("verified WeCom entry event requires ExternalUserID and UserID")
+            ensured = ensure_verified_wecom_customer(
+                corp_id=command.corp_id,
+                external_userid=external_userid,
+                owner_userid=owner_userid,
+                source_event_id=str(logged.get("id") or ""),
+            )
+            result["customer_identity"] = dict(ensured)
             entry_identity_plan: dict[str, Any] = {}
             if text(event.get("State")) and text(event.get("ExternalUserID")):
                 entry = process_channel_entry(
@@ -1031,6 +1043,25 @@ def process_wecom_external_contact_event(
                     corp_id=command.corp_id,
                     event_log_id=int(logged.get("id") or 0) or None,
                 )
+            repo.mark_event_status(int(logged["id"]), "success")
+        elif text(event.get("Event")) == "change_external_contact" and text(event.get("ChangeType")) in {
+            "del_external_contact",
+            "del_follow_user",
+        }:
+            external_userid = text(event.get("ExternalUserID"))
+            owner_userid = text(event.get("UserID"))
+            relationship = close_verified_wecom_relationship(
+                corp_id=command.corp_id,
+                external_userid=external_userid,
+                owner_userid=owner_userid if text(event.get("ChangeType")) == "del_follow_user" else "",
+            )
+            result.update(
+                {
+                    "handled": True,
+                    "relationship": relationship,
+                    "identity_sync": {"status": "skipped", "reason": "relationship_closed"},
+                }
+            )
             repo.mark_event_status(int(logged["id"]), "success")
         else:
             result["identity_sync"] = {"status": "skipped", "reason": "non_entry_change_type"}
