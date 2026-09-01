@@ -63,6 +63,27 @@
     return String(value || "").trim();
   }
 
+  function validateCatalogGroups(payload) {
+    const groups = payload && payload.groups;
+    if (!Array.isArray(groups)) throw new Error("企微标签数据格式异常，请刷新后重试。");
+    for (const group of groups) {
+      if (!group || typeof group !== "object"
+        || !normalized(group.group_id)
+        || !normalized(group.group_name)
+        || !Array.isArray(group.tags)) {
+        throw new Error("企微标签数据格式异常，请刷新后重试。");
+      }
+      for (const tag of group.tags) {
+        if (!tag || typeof tag !== "object"
+          || !normalized(tag.tag_id)
+          || !normalized(tag.tag_name)) {
+          throw new Error("企微标签数据格式异常，请刷新后重试。");
+        }
+      }
+    }
+    return groups;
+  }
+
   function formatSyncedAt(value) {
     const text = normalized(value);
     if (!text) return "-";
@@ -277,7 +298,7 @@
     renderCapacity();
     try {
       const payload = await requestJson(apiTags(), { method: "GET" }, "企微标签同步失败，请检查企微配置或稍后重试。");
-      state.groups = Array.isArray(payload.groups) ? payload.groups : [];
+      state.groups = validateCatalogGroups(payload);
       state.totalTags = Number(payload.total_tags || 0);
       state.tagLimit = Number(payload.tag_limit || 1000);
       state.syncedAt = normalized(payload.synced_at);
