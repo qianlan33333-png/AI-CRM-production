@@ -16,12 +16,13 @@
 - `queue_runtime_control.active_generation > 0`、`claim_enabled=true`，共享 generation
   marker 必须声明 `AICRM_QUEUE_RUNTIME_EXECUTE=1` 与
   `AICRM_QUEUE_CUTOVER_COMMITTED=1`。
-- 变更必须通过 PR 审核与检查；合并后的 `main` 必须通过 `CI Fast`。
+- 变更必须通过 PR 审核与 `pr / gate`；合并后的 `main`
+  必须通过完整检查后才能自动发布。
 
 ## 发布事务
 
-PR 合并后由 `promote-production.yml` 在 `main` 的 `CI Fast` 成功时自动发布该
-精确 SHA。运行单元管理器会在同一部署事务中：
+PR 合并后由 `promote-production.yml` 在 `main` push 上先运行完整检查，
+成功后自动发布该精确 SHA。运行单元管理器会在同一部署事务中：
 
 1. 给新旧 unit 安装事务守卫。
 2. 停止原 `aicrm-internal-queue-runtime.service`、
