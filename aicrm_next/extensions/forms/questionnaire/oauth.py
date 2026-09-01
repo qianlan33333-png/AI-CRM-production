@@ -371,6 +371,23 @@ class QuestionnaireOAuthAdapter:
                     target_id=str(state_payload.get("slug") or ""),
                     status_code=200,
                 )
+            from aicrm_next.crm.identity_contact.application import ResolvePersonIdentityQuery
+            from aicrm_next.crm.identity_contact.wechat_unionid_guard import resolve_oauth_unionid
+
+            canonical_unionid = resolve_oauth_unionid(
+                identity,
+                identity_query=ResolvePersonIdentityQuery(),
+            )
+            if not canonical_unionid:
+                self._record_diagnostic("unionid_required", request, state_payload)
+                return self._error(
+                    "unionid_required",
+                    "WeChat OAuth did not provide a canonical UnionID",
+                    event_type="questionnaire.oauth.callback.identity_missing",
+                    target_id=str(state_payload.get("slug") or ""),
+                    status_code=409,
+                )
+            identity["unionid"] = canonical_unionid
             app_id = runtime_setting("WECHAT_MP_APP_ID").strip() or ("wechat_mp_test_app" if self.mode in {"fake", "sandbox"} else "")
             openid = str(identity.get("openid") or "").strip()
             if not app_id or not openid:

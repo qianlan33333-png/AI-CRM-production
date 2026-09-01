@@ -17,7 +17,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Resp
 from fastapi.templating import Jinja2Templates
 
 from aicrm_next.platform.navigation_target import safe_completion_url
-from aicrm_next.crm.identity_contact.wechat_unionid_guard import WechatUnionIdAccessDecision
+from aicrm_next.crm.identity_contact.wechat_unionid_guard import evaluate_wechat_unionid_access
 from aicrm_next.platform.shared.errors import ContractError, NotFoundError
 from aicrm_next.platform.shared.pii_audit import infer_pii_result_count, set_pii_audit_result_count
 from aicrm_next.platform.shared.runtime import production_data_ready
@@ -765,26 +765,13 @@ def _questionnaire_oauth_start_url(slug: str, source_params: dict[str, str]) -> 
 
 def _questionnaire_access_decision(request: Request, slug: str):
     identity = questionnaire_h5_identity_from_cookies(request.cookies) or payment_identity_from_request(request)
-    if str(identity.get("openid") or "").strip():
-        return WechatUnionIdAccessDecision(allowed=True, identity=identity)
-    if not _is_wechat_browser(request):
-        return WechatUnionIdAccessDecision(
-            allowed=False,
-            identity={},
-            error="wechat_browser_required",
-            status_code=403,
-            message="请在微信中打开后完成授权。",
-        )
-    return WechatUnionIdAccessDecision(
-        allowed=False,
-        identity={},
-        error="wechat_oauth_required",
-        status_code=401,
+    return evaluate_wechat_unionid_access(
+        identity,
+        is_wechat_browser=_is_wechat_browser(request),
         oauth_start_url=_questionnaire_oauth_start_url(
             slug,
             _request_values(request, _QUESTIONNAIRE_SOURCE_PARAM_FIELDS),
         ),
-        message="请先完成微信授权后继续。",
     )
 
 

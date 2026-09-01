@@ -851,6 +851,10 @@ def _record_order_error(order_id: str, error: str) -> None:
 def _upsert_order(order: dict[str, Any], *, source_event_id: int | None = None) -> dict[str, Any]:
     order = dict(order)
     order_id = _text(order.get("order_id"))
+    buyer_openid = _text(order.get("openid"))
+    buyer_unionid = _text(order.get("unionid"))
+    if not buyer_unionid:
+        raise RuntimeError("wechat_shop_unionid_required")
     if database_mode() != "postgres":
         existing = dict(_FIXTURE_ORDERS.get(order_id) or {})
         saved = {
@@ -868,8 +872,6 @@ def _upsert_order(order: dict[str, Any], *, source_event_id: int | None = None) 
         _FIXTURE_ORDERS[order_id] = saved
         return deepcopy(saved)
     with _connect() as conn:
-        buyer_openid = _text(order.get("openid"))
-        buyer_unionid = _text(order.get("unionid"))
         customer_id = 0
         buyer_identity_id = 0
         if buyer_openid:
