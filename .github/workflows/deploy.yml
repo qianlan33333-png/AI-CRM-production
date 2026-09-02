@@ -25,8 +25,6 @@ jobs:
       DEPLOY_TARGET: production
       PUBLIC_BASE_URL: ${{ vars.PUBLIC_BASE_URL }}
       PUBLIC_HEALTH_URL: ${{ vars.PUBLIC_HEALTH_URL }}
-      PUBLIC_SERVER_NAME: ${{ vars.PUBLIC_SERVER_NAME }}
-      NGINX_CONFIG_PATH: ${{ vars.NGINX_CONFIG_PATH }}
       ALLOW_MISSING_WECHAT_SHOP_CALLBACK_TOKEN: ${{ vars.ALLOW_MISSING_WECHAT_SHOP_CALLBACK_TOKEN || '0' }}
       RELEASE_TERMINAL_HISTORY_ACK_MODE: ${{ vars.RELEASE_TERMINAL_HISTORY_ACK_MODE || 'required' }}
       RELEASE_REFRESH_ATTEMPT_KEY: ${{ github.run_id }}-${{ github.run_attempt }}
@@ -764,16 +762,12 @@ jobs:
             # Count-only R10 Group Ops/broadcast reconciliation. Never repairs, resends, or calls providers.
             python scripts/ops/reconcile_group_ops_broadcast.py \
               | tee /tmp/aicrm-group-ops-broadcast-reconciliation.json
-            test -n "${{ env.PUBLIC_SERVER_NAME }}"
-            test -n "${{ env.NGINX_CONFIG_PATH }}"
-            sudo /home/ubuntu/venvs/openclaw/bin/python \
-              scripts/ops/ensure_production_public_release_route.py --execute \
-              --expected-sha "$after_sha" \
-              --server-name "${{ env.PUBLIC_SERVER_NAME }}" \
-              --nginx-config "${{ env.NGINX_CONFIG_PATH }}" \
-              --local-health-url http://127.0.0.1:5001/health \
-              --public-health-url "${{ env.PUBLIC_HEALTH_URL }}" \
-              | tee /tmp/aicrm-public-release-route.json
+            curl --retry 10 --retry-all-errors --connect-timeout 10 --max-time 30 -sSf \
+              -D /tmp/aicrm_public_health_headers.txt "${{ env.PUBLIC_HEALTH_URL }}" \
+              -o /tmp/aicrm_public_health.json
+            public_release_sha="$(awk 'tolower($1) == "x-aicrm-release-sha:" {print $2}' \
+              /tmp/aicrm_public_health_headers.txt | tr -d '\r' | tail -n 1)"
+            test "$public_release_sha" = "$after_sha"
             python3 scripts/ops/manage_production_runtime_units.py --phase release-runtime-guard --execute
             runtime_units_stopped=0
             runtime_committed=1
