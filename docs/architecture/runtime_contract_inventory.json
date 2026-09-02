@@ -1097,7 +1097,7 @@
       "accessor": "runtime_setting",
       "file": "aicrm_next/extensions/forms/questionnaire/oauth.py",
       "key": "AICRM_NEXT_ACTION_TOKEN_SECRET",
-      "line": 63
+      "line": 64
     },
     {
       "accessor": "declared_runtime_setting_key",
@@ -1109,7 +1109,7 @@
       "accessor": "runtime_setting",
       "file": "aicrm_next/platform/shared/wechat_h5_session.py",
       "key": "AICRM_NEXT_ACTION_TOKEN_SECRET",
-      "line": 30
+      "line": 29
     },
     {
       "accessor": "declared_runtime_setting_key",
@@ -1391,7 +1391,7 @@
       "accessor": "managed_runtime_setting",
       "file": "aicrm_next/channels/integration_gateway/questionnaire_adapters.py",
       "key": "AICRM_NEXT_QUESTIONNAIRE_WEBHOOK_MODE",
-      "line": 835
+      "line": 838
     },
     {
       "accessor": "os.getenv",
@@ -1457,7 +1457,7 @@
       "accessor": "managed_runtime_setting",
       "file": "aicrm_next/channels/integration_gateway/questionnaire_adapters.py",
       "key": "AICRM_NEXT_WECHAT_OAUTH_MODE",
-      "line": 826
+      "line": 829
     },
     {
       "accessor": "managed_runtime_setting",
@@ -1529,7 +1529,7 @@
       "accessor": "managed_runtime_setting",
       "file": "aicrm_next/channels/integration_gateway/questionnaire_adapters.py",
       "key": "AICRM_NEXT_WECOM_TAG_MODE",
-      "line": 830
+      "line": 833
     },
     {
       "accessor": "os.getenv",
@@ -1571,7 +1571,7 @@
       "accessor": "managed_runtime_setting",
       "file": "aicrm_next/crm/identity_contact/sidebar_jssdk.py",
       "key": "AICRM_ONEID_READ_ENABLED",
-      "line": 452
+      "line": 446
     },
     {
       "accessor": "declared_runtime_setting_key",
@@ -1703,7 +1703,7 @@
       "accessor": "runtime_setting",
       "file": "aicrm_next/extensions/commerce/public_product/h5_wechat_pay.py",
       "key": "AICRM_PUBLIC_BASE_URL",
-      "line": 130
+      "line": 144
     },
     {
       "accessor": "declared_runtime_setting_key",
@@ -1823,7 +1823,7 @@
       "accessor": "runtime_setting",
       "file": "aicrm_next/extensions/forms/questionnaire/oauth.py",
       "key": "AICRM_QUESTIONNAIRE_OAUTH_ADAPTER_MODE",
-      "line": 99
+      "line": 101
     },
     {
       "accessor": "declared_runtime_setting_key",
@@ -1841,7 +1841,7 @@
       "accessor": "runtime_setting",
       "file": "aicrm_next/extensions/forms/questionnaire/oauth.py",
       "key": "AICRM_QUESTIONNAIRE_OAUTH_REDIRECT_ALLOWLIST",
-      "line": 118
+      "line": 123
     },
     {
       "accessor": "declared_runtime_setting_key",
@@ -1853,7 +1853,7 @@
       "accessor": "runtime_setting",
       "file": "aicrm_next/extensions/forms/questionnaire/oauth.py",
       "key": "AICRM_QUESTIONNAIRE_OAUTH_STATE_SECRET",
-      "line": 62
+      "line": 63
     },
     {
       "accessor": "managed_runtime_int",
@@ -1955,7 +1955,7 @@
       "accessor": "managed_runtime_setting",
       "file": "aicrm_next/crm/identity_contact/sidebar_jssdk.py",
       "key": "AICRM_SIDEBAR_JSSDK_ALLOWED_HOSTS",
-      "line": 682
+      "line": 684
     },
     {
       "accessor": "declared_runtime_setting_key",
@@ -2333,7 +2333,7 @@
       "accessor": "runtime_setting",
       "file": "aicrm_next/extensions/commerce/public_product/h5_wechat_pay.py",
       "key": "APP_BASE_URL",
-      "line": 132
+      "line": 146
     },
     {
       "accessor": "runtime_setting",
@@ -2741,7 +2741,7 @@
       "accessor": "runtime_setting",
       "file": "aicrm_next/extensions/commerce/public_product/h5_wechat_pay.py",
       "key": "PUBLIC_BASE_URL",
-      "line": 131
+      "line": 145
     },
     {
       "accessor": "runtime_setting",
@@ -2789,7 +2789,7 @@
       "accessor": "runtime_setting",
       "file": "aicrm_next/extensions/forms/questionnaire/oauth.py",
       "key": "SECRET_KEY",
-      "line": 64
+      "line": 65
     },
     {
       "accessor": "runtime_setting",
@@ -2819,7 +2819,7 @@
       "accessor": "runtime_setting",
       "file": "aicrm_next/platform/shared/wechat_h5_session.py",
       "key": "SECRET_KEY",
-      "line": 31
+      "line": 29
     },
     {
       "accessor": "declared_runtime_setting_key",
@@ -2861,7 +2861,7 @@
       "accessor": "managed_runtime_setting",
       "file": "aicrm_next/channels/integration_gateway/questionnaire_adapters.py",
       "key": "WECHAT_MP_APP_ID",
-      "line": 439
+      "line": 442
     },
     {
       "accessor": "managed_runtime_setting",
@@ -2873,13 +2873,25 @@
       "accessor": "declared_runtime_setting_key",
       "file": "aicrm_next/extensions/commerce/public_product/h5_wechat_pay.py",
       "key": "WECHAT_MP_APP_ID",
-      "line": 80
+      "line": 76
     },
     {
       "accessor": "runtime_setting",
       "file": "aicrm_next/extensions/forms/questionnaire/application.py",
       "key": "WECHAT_MP_APP_ID",
       "line": 298
+    },
+    {
+      "accessor": "declared_runtime_setting_key",
+      "file": "aicrm_next/extensions/forms/questionnaire/oauth.py",
+      "key": "WECHAT_MP_APP_ID",
+      "line": 31
+    },
+    {
+      "accessor": "runtime_setting",
+      "file": "aicrm_next/extensions/forms/questionnaire/oauth.py",
+      "key": "WECHAT_MP_APP_ID",
+      "line": 391
     },
     {
       "accessor": "declared_runtime_setting_key",
@@ -2891,13 +2903,13 @@
       "accessor": "managed_runtime_setting",
       "file": "aicrm_next/channels/integration_gateway/questionnaire_adapters.py",
       "key": "WECHAT_MP_APP_SECRET",
-      "line": 443
+      "line": 446
     },
     {
       "accessor": "declared_runtime_setting_key",
       "file": "aicrm_next/extensions/commerce/public_product/h5_wechat_pay.py",
       "key": "WECHAT_MP_APP_SECRET",
-      "line": 80
+      "line": 76
     },
     {
       "accessor": "runtime_setting",
@@ -2915,7 +2927,7 @@
       "accessor": "managed_runtime_setting",
       "file": "aicrm_next/channels/integration_gateway/questionnaire_adapters.py",
       "key": "WECHAT_MP_OAUTH_SCOPE",
-      "line": 447
+      "line": 450
     },
     {
       "accessor": "managed_runtime_setting",
@@ -2939,7 +2951,7 @@
       "accessor": "managed_runtime_setting",
       "file": "aicrm_next/crm/identity_contact/oneid_repository.py",
       "key": "WECHAT_OPEN_PLATFORM_SCOPE_ID",
-      "line": 30
+      "line": 29
     },
     {
       "accessor": "managed_runtime_setting",
@@ -2951,7 +2963,7 @@
       "accessor": "declared_runtime_setting_key",
       "file": "aicrm_next/extensions/commerce/public_product/h5_wechat_pay.py",
       "key": "WECHAT_PAY_API_BASE",
-      "line": 80
+      "line": 76
     },
     {
       "accessor": "managed_runtime_setting",
@@ -2963,7 +2975,7 @@
       "accessor": "declared_runtime_setting_key",
       "file": "aicrm_next/extensions/commerce/public_product/h5_wechat_pay.py",
       "key": "WECHAT_PAY_API_V3_KEY",
-      "line": 80
+      "line": 76
     },
     {
       "accessor": "managed_runtime_setting",
@@ -2975,7 +2987,13 @@
       "accessor": "declared_runtime_setting_key",
       "file": "aicrm_next/extensions/commerce/public_product/h5_wechat_pay.py",
       "key": "WECHAT_PAY_APP_ID",
-      "line": 80
+      "line": 76
+    },
+    {
+      "accessor": "declared_runtime_setting_key",
+      "file": "aicrm_next/extensions/commerce/public_product/h5_wechat_pay.py",
+      "key": "WECHAT_PAY_APP_SECRET",
+      "line": 76
     },
     {
       "accessor": "managed_runtime_setting",
@@ -2987,13 +3005,13 @@
       "accessor": "declared_runtime_setting_key",
       "file": "aicrm_next/extensions/commerce/public_product/h5_wechat_pay.py",
       "key": "WECHAT_PAY_CERT_SERIAL_NO",
-      "line": 80
+      "line": 76
     },
     {
       "accessor": "declared_runtime_setting_key",
       "file": "aicrm_next/extensions/commerce/public_product/h5_wechat_pay.py",
       "key": "WECHAT_PAY_ENABLED",
-      "line": 80
+      "line": 76
     },
     {
       "accessor": "managed_runtime_setting",
@@ -3005,7 +3023,7 @@
       "accessor": "declared_runtime_setting_key",
       "file": "aicrm_next/extensions/commerce/public_product/h5_wechat_pay.py",
       "key": "WECHAT_PAY_MCH_ID",
-      "line": 80
+      "line": 76
     },
     {
       "accessor": "runtime_setting",
@@ -3029,19 +3047,19 @@
       "accessor": "managed_runtime_setting",
       "file": "aicrm_next/channels/integration_gateway/questionnaire_adapters.py",
       "key": "WECHAT_PAY_NOTIFY_URL",
-      "line": 473
+      "line": 476
     },
     {
       "accessor": "declared_runtime_setting_key",
       "file": "aicrm_next/extensions/commerce/public_product/h5_wechat_pay.py",
       "key": "WECHAT_PAY_NOTIFY_URL",
-      "line": 80
+      "line": 76
     },
     {
       "accessor": "declared_runtime_setting_key",
       "file": "aicrm_next/extensions/commerce/public_product/h5_wechat_pay.py",
       "key": "WECHAT_PAY_OAUTH_SCOPE",
-      "line": 80
+      "line": 76
     },
     {
       "accessor": "managed_runtime_setting",
@@ -3059,7 +3077,7 @@
       "accessor": "declared_runtime_setting_key",
       "file": "aicrm_next/extensions/commerce/public_product/h5_wechat_pay.py",
       "key": "WECHAT_PAY_PLATFORM_CERT_SERIAL_NO",
-      "line": 80
+      "line": 76
     },
     {
       "accessor": "managed_runtime_setting",
@@ -3071,7 +3089,7 @@
       "accessor": "declared_runtime_setting_key",
       "file": "aicrm_next/extensions/commerce/public_product/h5_wechat_pay.py",
       "key": "WECHAT_PAY_PLATFORM_PUBLIC_KEY_PATH",
-      "line": 80
+      "line": 76
     },
     {
       "accessor": "managed_runtime_setting",
@@ -3083,7 +3101,7 @@
       "accessor": "declared_runtime_setting_key",
       "file": "aicrm_next/extensions/commerce/public_product/h5_wechat_pay.py",
       "key": "WECHAT_PAY_PRIVATE_KEY_PATH",
-      "line": 80
+      "line": 76
     },
     {
       "accessor": "managed_runtime_setting",
@@ -3113,43 +3131,49 @@
       "accessor": "declared_runtime_setting_key",
       "file": "aicrm_next/extensions/commerce/public_product/h5_wechat_pay.py",
       "key": "WECHAT_PAY_TIMEOUT_SECONDS",
-      "line": 80
+      "line": 76
     },
     {
       "accessor": "managed_runtime_setting",
       "file": "aicrm_next/extensions/commerce/commerce/wechat_shop_service.py",
       "key": "WECHAT_SHOP_API_BASE",
-      "line": 114
+      "line": 121
     },
     {
       "accessor": "managed_runtime_setting",
       "file": "aicrm_next/extensions/commerce/commerce/wechat_shop_service.py",
       "key": "WECHAT_SHOP_APPID",
-      "line": 112
+      "line": 119
     },
     {
       "accessor": "managed_runtime_setting",
       "file": "aicrm_next/extensions/commerce/commerce/wechat_shop_service.py",
       "key": "WECHAT_SHOP_APPID",
-      "line": 703
+      "line": 707
+    },
+    {
+      "accessor": "managed_runtime_setting",
+      "file": "aicrm_next/extensions/commerce/commerce/wechat_shop_service.py",
+      "key": "WECHAT_SHOP_APPID",
+      "line": 880
     },
     {
       "accessor": "runtime_setting",
       "file": "aicrm_next/extensions/commerce/commerce/wechat_shop_service.py",
       "key": "WECHAT_SHOP_APPSECRET",
-      "line": 98
+      "line": 105
     },
     {
       "accessor": "runtime_setting",
       "file": "aicrm_next/extensions/commerce/commerce/wechat_shop_service.py",
       "key": "WECHAT_SHOP_APPSECRET",
-      "line": 113
+      "line": 120
     },
     {
       "accessor": "runtime_setting",
       "file": "aicrm_next/extensions/commerce/commerce/wechat_shop_service.py",
       "key": "WECHAT_SHOP_CALLBACK_TOKEN",
-      "line": 98
+      "line": 105
     },
     {
       "accessor": "runtime_setting",
@@ -3167,7 +3191,7 @@
       "accessor": "managed_runtime_setting",
       "file": "aicrm_next/extensions/commerce/commerce/wechat_shop_service.py",
       "key": "WECHAT_SHOP_HTTP_TIMEOUT_SECONDS",
-      "line": 109
+      "line": 116
     },
     {
       "accessor": "managed_runtime_setting",
@@ -3455,13 +3479,13 @@
       "accessor": "managed_runtime_setting",
       "file": "aicrm_next/crm/identity_contact/sidebar_jssdk.py",
       "key": "WECOM_CORP_ID",
-      "line": 147
+      "line": 146
     },
     {
       "accessor": "managed_runtime_setting",
       "file": "aicrm_next/crm/identity_contact/sidebar_jssdk.py",
       "key": "WECOM_CORP_ID",
-      "line": 560
+      "line": 562
     },
     {
       "accessor": "managed_runtime_setting",
@@ -3474,6 +3498,12 @@
       "file": "aicrm_next/crm/sidebar_write/api.py",
       "key": "WECOM_CORP_ID",
       "line": 157
+    },
+    {
+      "accessor": "runtime_setting",
+      "file": "aicrm_next/extensions/archive/message_archive/repo.py",
+      "key": "WECOM_CORP_ID",
+      "line": 443
     },
     {
       "accessor": "declared_runtime_setting_key",
@@ -3617,7 +3647,7 @@
       "accessor": "runtime_setting",
       "file": "aicrm_next/crm/identity_contact/sidebar_jssdk.py",
       "key": "WECOM_SECRET",
-      "line": 561
+      "line": 563
     },
     {
       "accessor": "runtime_setting",
@@ -3965,6 +3995,7 @@
     "WECHAT_PAY_API_BASE",
     "WECHAT_PAY_API_V3_KEY",
     "WECHAT_PAY_APP_ID",
+    "WECHAT_PAY_APP_SECRET",
     "WECHAT_PAY_CERT_SERIAL_NO",
     "WECHAT_PAY_ENABLED",
     "WECHAT_PAY_MCH_ID",
