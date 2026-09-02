@@ -27,6 +27,15 @@ The architecture skill is the canonical development preflight. Other agent entry
 documents must point back to it instead of introducing separate required-reading
 lists.
 
+## Production Delivery Gate
+
+Any task that inspects, changes, or executes production delivery must also read
+and follow
+[`skills/ai-crm-production-delivery/SKILL.md`](skills/ai-crm-production-delivery/SKILL.md).
+This gate fixes the repository, host allowlist, evidence separation, sensitive
+asset policy, and external-effect boundary for production delivery work. It does
+not authorize DNS changes, old-host operations, or real provider calls.
+
 ## Operation Cycle Agent Reporting
 
 Any Agent task that creates, updates, reports, or diagnoses a CRM operation cycle

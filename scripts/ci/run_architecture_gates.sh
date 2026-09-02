@@ -21,6 +21,7 @@ fi
 
 run_fast() {
 "$PYTHON" tools/check_capability_registry.py
+"$PYTHON" tools/check_new_crm_asset_migration_matrix.py
 "$PYTHON" tools/check_deployment_profiles.py
 "$PYTHON" tools/check_job_catalog.py
 "$PYTHON" tools/check_domain_migration_contract.py
