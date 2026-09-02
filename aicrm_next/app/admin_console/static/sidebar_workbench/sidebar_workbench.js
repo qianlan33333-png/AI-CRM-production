@@ -60,6 +60,7 @@
   };
   const PANEL_CACHE_TTL_MS = 2 * 60 * 1000;
   const JSSDK_CONFIG_CACHE_MAX_TTL_MS = 5 * 60 * 1000;
+  const MAX_PROVISIONING_RETRIES = 5;
   const PRODUCT_CARD_IMAGE_PATH = "/static/sidebar_workbench/product-card-cover.png";
 
   const state = {
@@ -74,6 +75,7 @@
     sidebar_oauth_started: false,
     provisioning_sync_token: "",
     provisioning_retry_timer: null,
+    provisioning_retry_attempts: 0,
     activeTab: "profile",
     profileView: "basic",
     materialType: "image",
@@ -238,6 +240,9 @@
   function setExternalUserid(value) {
     const nextExternalUserid = String(value || "").trim();
     if (nextExternalUserid === state.external_userid) return nextExternalUserid;
+    window.clearTimeout(state.provisioning_retry_timer);
+    state.provisioning_retry_timer = null;
+    state.provisioning_retry_attempts = 0;
     state.external_userid = nextExternalUserid;
     if (state.sidebar_owner_token_external_userid !== nextExternalUserid) {
       clearSidebarOwnerToken(nextExternalUserid ? "customer_changed" : "external_userid_missing");
@@ -266,6 +271,9 @@
         });
         return false;
       }
+      window.clearTimeout(state.provisioning_retry_timer);
+      state.provisioning_retry_timer = null;
+      state.provisioning_retry_attempts = 0;
       state.sidebar_owner_token = token;
       state.sidebar_owner_token_external_userid = contextExternalUserid;
     } else if (hasTokenField && (!expected || !state.external_userid || state.external_userid === expected)) {
@@ -550,9 +558,14 @@
   }
 
   function scheduleProvisioningRetry(retryAfterSeconds) {
-    window.clearTimeout(state.provisioning_retry_timer);
+    if (state.provisioning_retry_timer || state.provisioning_retry_attempts >= MAX_PROVISIONING_RETRIES) return false;
     const delay = Math.max(1, Math.min(Number(retryAfterSeconds) || 2, 30)) * 1000;
-    state.provisioning_retry_timer = window.setTimeout(() => boot(), delay);
+    state.provisioning_retry_attempts += 1;
+    state.provisioning_retry_timer = window.setTimeout(() => {
+      state.provisioning_retry_timer = null;
+      boot();
+    }, delay);
+    return true;
   }
 
   function renderProvisioning() {
@@ -561,7 +574,9 @@
     renderTabs();
     content.innerHTML = panel(
       "核心画像",
-      '<div class="status">正在核验企微客户关系，客户身份建立后会自动打开。</div>' +
+      '<div class="status">' + (state.provisioning_retry_attempts >= MAX_PROVISIONING_RETRIES && !state.provisioning_retry_timer
+        ? "客户身份暂未建立，请点击重试。"
+        : "正在核验企微客户关系，客户身份建立后会自动打开。") + '</div>' +
         '<div class="row-actions"><button class="btn primary" type="button" data-retry-boot>立即重试</button></div>'
     );
   }
@@ -2168,6 +2183,11 @@
     const retryButton = event.target.closest("[data-retry-boot]");
     if (retryButton) {
       retryButton.disabled = true;
+      if (state.sidebar_owner_token_status === "provisioning") {
+        window.clearTimeout(state.provisioning_retry_timer);
+        state.provisioning_retry_timer = null;
+        state.provisioning_retry_attempts = 0;
+      }
       boot({ forceSidebarOAuth: true });
       return;
     }

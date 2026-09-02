@@ -169,8 +169,8 @@ test("product send reports an authorization failure instead of claiming it is ou
 });
 
 
-test("sidebar page invalidates the cached script for the customer-context bootstrap fix", () => {
-  assert.match(templateSource, /sidebar_workbench\.js\?v=20260805-context-bootstrap/);
+test("sidebar page invalidates the cached script for the OneID provisioning fix", () => {
+  assert.match(templateSource, /sidebar_workbench\.js\?v=20260902-oneid-provisioning/);
 });
 
 
