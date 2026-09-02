@@ -40,7 +40,7 @@ jobs:
           printf '%s' "$expected_release_sha" | grep -Eq '^[0-9a-f]{40}$'
           test "$(git rev-parse HEAD)" = "$expected_release_sha"
           curl -sSf -D /tmp/aicrm-ai-audience-health.headers \
-            https://www.youcangogogo.com/health \
+            "${{ vars.PUBLIC_HEALTH_URL }}" \
             -o /tmp/aicrm-ai-audience-health.json
           public_sha="$(awk 'tolower($1) == "x-aicrm-release-sha:" {gsub("\\r", "", $2); print $2}' /tmp/aicrm-ai-audience-health.headers)"
           test "$public_sha" = "$expected_release_sha"

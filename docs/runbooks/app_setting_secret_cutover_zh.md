@@ -51,7 +51,7 @@ python3 scripts/ops/migrate_app_setting_secrets.py --dry-run \
 5. 只有运行时完全静默后，才允许 stash、`git reset --hard`、写 `.release-sha`、安装依赖和执行 Alembic。
 6. 执行本手册下方的 Secret migration 与 reconciliation。任一对账项失败时保留 deploy-in-progress 闸门，Web 和 worker 均不得恢复。
 7. 从当前 release 安装并 enable 唯一主 Web unit `openclaw-wecom-postgres.service`，删除重复的 `/etc/systemd/system/aicrm-web.service`。此时 deploy-in-progress 仍保留；只创建运行时授权 `/run/aicrm-production-web-start-authorized`，让 primary Web 的 OR 条件单独放行，timer/worker 继续被持久闸门阻断。该授权在重启时自动消失，不能跨重启绕过失败关闭。
-8. 在恢复 worker 前执行本地 canary：要求 health 的 exact SHA 与 Secret 状态全绿，QR/OAuth 均 302 到企微官方入口，`appid/agentid` 存在，内层 `redirect_uri` 精确等于 `https://www.youcangogogo.com/auth/wecom/callback`，并且没有真实外呼。若此阶段主机重启，`/run` 授权消失，持久 deploy-in-progress 会继续阻断 Web、worker 与 timer。
+8. 在恢复 worker 前执行本地 canary：要求 health 的 exact SHA 与 Secret 状态全绿，QR/OAuth 均 302 到企微官方入口，`appid/agentid` 存在，内层 `redirect_uri` 精确等于 `https://id-dev.youcangogogo.com/auth/wecom/callback`，并且没有真实外呼。若此阶段主机重启，`/run` 授权消失，持久 deploy-in-progress 会继续阻断 Web、worker 与 timer。
 9. canary 与后台只读 smoke 通过后，创建 `/run/aicrm-production-runtime-start-authorized` 并删除 Web 专用授权；生产后台只读 probe 的单请求阈值为 20 秒，用于覆盖 push-center 冷查询，超时仍失败关闭。持久 deploy-in-progress 仍保留。此运行时授权只允许在当前启动周期恢复 active timer/service，approval timer 只恢复事务前已 enabled 的项。随后验证 primary/active 均 enabled+active，disabled approval 不得 active，retired 均 not-found+inactive+not-failed，且 `retired_unit_files` 必须覆盖全部 `retired_forbidden`。
 10. callback smoke 与公网 exact-SHA 均通过后，最终提交动作先删除 `/run` 运行时授权、再删除持久 deploy-in-progress，并立即写入事务 commit 标志。若最终提交前主机重启，两个 `/run` 授权都会消失，持久闸门继续阻断完整 runtime。
 
@@ -87,25 +87,11 @@ python3 scripts/ops/check_secret_reference_cutover.py \
 
 重复执行是幂等的：已经解析成功的引用不会新建版本，已脱敏审计行不会再次改写，也不会刷新对应 `app_settings.updated_at`。执行报告中的 `audit_rows_redacted` 仅为计数，不包含审计行 ID 或原内容。
 
-## 公网 exact-SHA 收口
+## 第二系统公网 exact-SHA 收口
 
-本机 `127.0.0.1:5001/health` 命中新 release 不代表公网已切换。Web、callback 和运行单元验证后，部署必须再执行：
+本机 `127.0.0.1:5001/health` 命中新 release 不代表第二系统公网入口已经就绪。Web、callback 和运行单元验证后，部署必须轮询 `https://id-dev.youcangogogo.com/health`，并要求返回 HTTP 200 且 `x-aicrm-release-sha == verified workflow SHA`。
 
-```bash
-sudo /home/ubuntu/venvs/openclaw/bin/python \
-  scripts/ops/ensure_production_public_release_route.py --execute \
-  --expected-sha "$after_sha" \
-  --server-name www.youcangogogo.com \
-  --nginx-config /etc/nginx/sites-enabled/youcangogogo.conf \
-  --local-health-url http://127.0.0.1:5001/health \
-  --public-health-url https://www.youcangogogo.com/health
-```
-
-如果手册中的配置路径已经漂移或不存在，脚本会读取 `nginx -T` 输出的 `/etc/nginx/` 有效配置文件清单，只在唯一文件承载目标域名 TLS 根路由时选中它；找不到或命中多个文件会 fail closed，不扫描或修改 Nginx 未实际 include 的其他文件。
-
-该步骤只允许一种自动修复：生产域名 TLS server 的根路由单一 loopback Web upstream `127.0.0.1:5000` 切到已验证的 `127.0.0.1:5001`。多 upstream、非 loopback、其他端口、根路由歧义或 Web/callback 共用 upstream 都必须 fail closed，只输出不含配置原文的拓扑摘要。受控修复先在 `/etc/nginx/backups` 写入 `0600` 备份，之后要求 `nginx -t`、reload 和公网 `x-aicrm-release-sha` 全部命中；任一失败都恢复原配置并再次 reload。
-
-只有本机和公网两个 health 均为 HTTP 200，且 `x-aicrm-release-sha == verified workflow SHA`，才能记录部署完成。
+该检查只读取第二系统健康入口，不修改 DNS、Nginx、Caddy 或其他服务器配置。`www.youcangogogo.com` 与 `150.158.82.186` 不属于本仓库的部署目标。
 
 ## 必须为零的对账项
 

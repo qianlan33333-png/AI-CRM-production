@@ -71,22 +71,19 @@ def test_promotion_and_deploy_preserve_exact_sha_lock_health_and_rollback() -> N
     assert deploy_ssh_step["with"]["command_timeout"] == "20m"
 
 
-def test_active_production_callback_relay_uses_current_host() -> None:
-    relay = (WORKFLOWS / "relay-id-validation-wecom-callback.yml").read_text(encoding="utf-8")
-    assert "EXPECTED_SOURCE_HOST: 124.220.53.183" in relay
-    assert "RELAY ONE CALLBACK FROM 124 TO 49" in relay
-    assert "SHA256:qbHmMUPtj9373JhvK807wWcewj5xxhOfuCwq1gu16n8" in relay
-    assert "150.158.82.186" not in relay
+def test_active_workflows_exclude_legacy_www_and_old_host() -> None:
+    assert not (WORKFLOWS / "public-www-production-cutover.yml").exists()
+    assert not (WORKFLOWS / "relay-id-validation-wecom-callback.yml").exists()
+    for path in WORKFLOWS.glob("*.yml"):
+        source = path.read_text(encoding="utf-8")
+        assert "www.youcangogogo.com" not in source, path.name
+        assert "150.158.82.186" not in source, path.name
 
 
-def test_public_www_cutover_is_manual_exact_sha_and_guarded() -> None:
-    workflow = _workflow("public-www-production-cutover.yml")
-    source = (WORKFLOWS / "public-www-production-cutover.yml").read_text(encoding="utf-8")
-    assert set(workflow["on"]) == {"workflow_dispatch"}
-    assert workflow["jobs"]["cutover"]["environment"] == "production"
-    assert "CUTOVER_PUBLIC_WWW_TO_CURRENT_RELEASE" in source
-    assert "test \"$(git rev-parse HEAD)\" = \"$EXPECTED_RELEASE_SHA\"" in source
-    assert "ensure_production_public_release_route.py --execute" in source
-    assert "--local-health-url http://127.0.0.1:5001/health" in source
-    assert "--public-health-url \"$public_health_url\"" in source
-    assert "test \"$actual_sha\" = \"$EXPECTED_RELEASE_SHA\"" in source
+def test_deploy_verifies_second_system_without_route_mutation() -> None:
+    deploy = (WORKFLOWS / "deploy.yml").read_text(encoding="utf-8")
+    assert "PUBLIC_HEALTH_URL: ${{ vars.PUBLIC_HEALTH_URL }}" in deploy
+    assert 'test "$public_release_sha" = "$after_sha"' in deploy
+    assert "ensure_production_public_release_route.py" not in deploy
+    assert "PUBLIC_SERVER_NAME" not in deploy
+    assert "NGINX_CONFIG_PATH" not in deploy

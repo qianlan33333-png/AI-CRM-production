@@ -33,7 +33,7 @@ jobs:
           test "$CONFIRMATION" = 'DIAGNOSE AI-CRM DEPLOYMENT PROFILE READ ONLY'
           printf '%s' "$EXPECTED_RELEASE_SHA" | grep -Eq '^[0-9a-f]{40}$'
           curl -sSf -D /tmp/aicrm-deployment-profile-health.headers \
-            https://www.youcangogogo.com/health \
+            "${{ vars.PUBLIC_HEALTH_URL }}" \
             -o /tmp/aicrm-deployment-profile-health.json
           public_sha="$(awk 'tolower($1) == "x-aicrm-release-sha:" {gsub("\\r", "", $2); print $2}' /tmp/aicrm-deployment-profile-health.headers)"
           test "$public_sha" = "$EXPECTED_RELEASE_SHA"
