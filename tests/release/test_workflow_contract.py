@@ -54,6 +54,9 @@ def test_promotion_and_deploy_preserve_exact_sha_lock_health_and_rollback() -> N
         if step.get("name") == "Deploy via SSH"
     )
     assert "workflow_run:" not in promotion
+    assert "EXPECTED_DEPLOY_HOST: 124.220.53.183" in deploy
+    assert "DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}" in deploy
+    assert 'if [ "$DEPLOY_HOST" != "$EXPECTED_DEPLOY_HOST" ]; then' in deploy
     assert "push:" in promotion
     assert "branches:" in promotion
     assert "- main" in promotion

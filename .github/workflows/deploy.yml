@@ -23,6 +23,8 @@ jobs:
     runs-on: ubuntu-latest
     env:
       DEPLOY_TARGET: production
+      EXPECTED_DEPLOY_HOST: 124.220.53.183
+      DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
       PUBLIC_BASE_URL: ${{ vars.PUBLIC_BASE_URL }}
       PUBLIC_HEALTH_URL: ${{ vars.PUBLIC_HEALTH_URL }}
       ALLOW_MISSING_WECHAT_SHOP_CALLBACK_TOKEN: ${{ vars.ALLOW_MISSING_WECHAT_SHOP_CALLBACK_TOKEN || '0' }}
@@ -42,6 +44,10 @@ jobs:
           set -o pipefail
           verified_sha="${{ inputs.release_sha }}"
           deploy_target="$DEPLOY_TARGET"
+          if [ "$DEPLOY_HOST" != "$EXPECTED_DEPLOY_HOST" ]; then
+            echo "DEPLOY_HOST is not the approved AI-CRM production host"
+            exit 1
+          fi
           if ! printf '%s' "$verified_sha" | grep -Eq '^[0-9a-f]{40}$'; then
             echo "invalid verified workflow sha"
             exit 1
