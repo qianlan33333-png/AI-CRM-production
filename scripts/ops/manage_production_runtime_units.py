@@ -952,7 +952,7 @@ def _require_disabled(runner: Runner, unit: str, *, error_prefix: str) -> None:
     if not runner.execute:
         return
     state = (proc.stdout or "").strip().lower() if proc is not None else ""
-    if proc is None or proc.returncode == 0 or state not in {"disabled", "masked"}:
+    if proc is None or proc.returncode == 0 or state not in {"disabled", "masked", "not-found"}:
         raise RuntimeError(f"{error_prefix}: {unit}: {state or 'unknown'}")
 
 
