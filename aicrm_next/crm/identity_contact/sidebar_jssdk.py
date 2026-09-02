@@ -454,13 +454,29 @@ def _sidebar_customer_access(*, corp_id: str, viewer_userid: str, external_useri
         return {"status": "ready" if authorized else "forbidden", "unionid_status": "pending"}
     if database_mode() != "postgres":
         return {"status": "ready" if authorized else "forbidden", "unionid_status": "pending"}
-    state = PostgresOneIDService().customer_context_state(
+    oneid_service = PostgresOneIDService()
+    state = oneid_service.customer_context_state(
         corp_id=corp_id,
         owner_userid=viewer_userid,
         external_userid=external_userid,
     )
     if state.get("identity_exists"):
         return {"status": "ready" if state.get("relation_active") else "forbidden", **state}
+    if authorized:
+        ensured = oneid_service.ensure_verified_wecom_identity(
+            corp_id=corp_id,
+            owner_userid=viewer_userid,
+            external_userid=external_userid,
+            source_type="sidebar_verified_follow_relation",
+        )
+        return {
+            "status": "ready",
+            "identity_exists": True,
+            "relation_active": True,
+            "identity_id": ensured.identity_id,
+            "customer_id": ensured.customer_id,
+            "unionid_status": "pending",
+        }
     planned = enqueue_sidebar_identity_verification(
         corp_id=corp_id,
         owner_userid=viewer_userid,

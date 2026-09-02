@@ -93,7 +93,7 @@ function loadHarness(fetchImpl) {
   };
   const instrumented = source.replace(
     bootMarker,
-    "  globalThis.__sidebarTokenTestApi = { applySidebarOwnerToken, jssdkConfigUrl, maybeStartSidebarOAuth, refreshSidebarOwnerToken, requestJson, setExternalUserid, state };\n})();",
+    "  globalThis.__sidebarTokenTestApi = { applySidebarOwnerToken, jssdkConfigUrl, maybeStartSidebarOAuth, refreshSidebarOwnerToken, requestJson, scheduleProvisioningRetry, setExternalUserid, state };\n})();",
   );
   const context = {
     AbortController,
@@ -260,4 +260,21 @@ test("a provisioning response keeps the sidebar in identity setup without issuin
   assert.equal(api.state.provisioning_sync_token, "opaque-sync-token");
   assert.notEqual(api.state.provisioning_retry_timer, null);
   clearTimeout(api.state.provisioning_retry_timer);
+});
+
+
+test("automatic provisioning retries stop after the bounded retry budget", () => {
+  const api = loadHarness(async () => {
+    throw new Error("bounded retry scheduling must not issue a request");
+  });
+
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    assert.equal(api.scheduleProvisioningRetry(30), true);
+    clearTimeout(api.state.provisioning_retry_timer);
+    api.state.provisioning_retry_timer = null;
+  }
+
+  assert.equal(api.scheduleProvisioningRetry(30), false);
+  assert.equal(api.state.provisioning_retry_timer, null);
+  assert.equal(api.state.provisioning_retry_attempts, 5);
 });

@@ -234,6 +234,64 @@ def test_sidebar_context_token_returns_opaque_provisioning_state_for_unseen_cont
     ]
 
 
+def test_sidebar_context_token_bootstraps_oneid_from_verified_follow_relation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("WECOM_CORP_ID", "corp-a")
+
+    class RelationService:
+        def authorize(self, **_kwargs) -> bool:
+            return True
+
+    class EnsuredIdentity:
+        customer_id = 42
+        identity_id = 84
+
+    class OneIDService:
+        ensured: list[dict] = []
+
+        def customer_context_state(self, **_kwargs):
+            return {"identity_exists": False, "relation_active": False}
+
+        def ensure_verified_wecom_identity(self, **kwargs):
+            self.ensured.append(kwargs)
+            return EnsuredIdentity()
+
+    monkeypatch.setattr(
+        "aicrm_next.crm.identity_contact.sidebar_jssdk.build_sidebar_authorization_service",
+        lambda: RelationService(),
+    )
+    monkeypatch.setattr("aicrm_next.crm.identity_contact.sidebar_jssdk.database_mode", lambda: "postgres")
+    monkeypatch.setattr("aicrm_next.crm.identity_contact.sidebar_jssdk.PostgresOneIDService", OneIDService)
+    client = TestClient(create_app(), raise_server_exceptions=False)
+    client.cookies.set(
+        SIDEBAR_VIEWER_COOKIE,
+        sign_session_payload(
+            {
+                "auth_source": "wecom_sidebar_oauth",
+                "wecom_userid": "staff-a",
+                "corp_id": "corp-a",
+                "session_id": "session-a",
+                "iat": int(time()),
+            }
+        ),
+    )
+
+    response = client.post("/api/sidebar/context-token", json={"external_userid": "external-existing"})
+
+    assert response.status_code == 200
+    assert response.json()["context_status"] == "ready"
+    assert response.json()["sidebar_owner_token_status"] == "issued"
+    assert OneIDService.ensured == [
+        {
+            "corp_id": "corp-a",
+            "owner_userid": "staff-a",
+            "external_userid": "external-existing",
+            "source_type": "sidebar_verified_follow_relation",
+        }
+    ]
+
+
 def test_sidebar_oauth_cookie_is_employee_scoped_and_callback_url_is_clean(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

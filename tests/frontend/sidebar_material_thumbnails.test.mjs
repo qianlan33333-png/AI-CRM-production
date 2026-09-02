@@ -44,5 +44,5 @@ test("viewport cancellation can resume and terminal failures expose a manual ret
 
 test("WeCom receives cache-busted shared loader and sidebar script", () => {
   assert.match(template, /image_resource_loader\.js\?v=resource-governance-v2-pending-retry/);
-  assert.match(template, /sidebar_workbench\.js\?v=20260805-context-bootstrap/);
+  assert.match(template, /sidebar_workbench\.js\?v=20260902-oneid-provisioning/);
 });
