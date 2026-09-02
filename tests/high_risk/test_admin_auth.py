@@ -118,24 +118,10 @@ def test_action_token_rejects_expiry_tampering_and_safe_methods() -> None:
         )
 
 
-def test_sidebar_context_token_requires_current_active_follow_relation(
+def test_sidebar_context_token_uses_current_customer_without_follow_relation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("WECOM_CORP_ID", "corp-a")
-
-    class RelationService:
-        def authorize(self, **kwargs) -> bool:
-            return kwargs == {
-                "corp_id": "corp-a",
-                "user_id": "staff-a",
-                "external_userid": "external-a",
-            }
-
-    monkeypatch.setattr(
-        "aicrm_next.crm.identity_contact.sidebar_jssdk.build_sidebar_authorization_service",
-        lambda: RelationService(),
-        raising=False,
-    )
     client = TestClient(create_app(), raise_server_exceptions=False)
     client.cookies.set(
         SIDEBAR_VIEWER_COOKIE,
@@ -158,9 +144,9 @@ def test_sidebar_context_token_requires_current_active_follow_relation(
     assert issued.json()["context_status"] == "ready"
     assert issued.json()["sidebar_owner_token_status"] == "issued"
     assert issued.json()["sidebar_owner_context"]["source"] == "sidebar_context_token_oauth_session"
-    assert switched.status_code == 403
-    assert switched.json()["context_status"] == "forbidden"
-    assert switched.json()["sidebar_owner_token"] == ""
+    assert switched.status_code == 200
+    assert switched.json()["context_status"] == "ready"
+    assert switched.json()["sidebar_owner_token_status"] == "issued"
 
     viewer_session = client.cookies.get(SIDEBAR_VIEWER_COOKIE)
     assert validate_sidebar_owner_context(
@@ -179,30 +165,27 @@ def test_sidebar_context_token_requires_current_active_follow_relation(
     assert replay["status"] == "sidebar_customer_scope_forbidden"
 
 
-def test_sidebar_context_token_returns_opaque_provisioning_state_for_unseen_contact(
+def test_sidebar_context_token_creates_oneid_for_unseen_contact_without_follow_relation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("WECOM_CORP_ID", "corp-a")
 
-    class RelationService:
-        def authorize(self, **_kwargs) -> bool:
-            return False
+    class EnsuredIdentity:
+        customer_id = 42
+        identity_id = 84
 
     class OneIDService:
+        ensured: list[dict] = []
+
         def customer_context_state(self, **_kwargs):
             return {"identity_exists": False, "relation_active": False}
 
-    planned: list[dict] = []
-    monkeypatch.setattr(
-        "aicrm_next.crm.identity_contact.sidebar_jssdk.build_sidebar_authorization_service",
-        lambda: RelationService(),
-    )
+        def ensure_verified_wecom_identity(self, **kwargs):
+            self.ensured.append(kwargs)
+            return EnsuredIdentity()
+
     monkeypatch.setattr("aicrm_next.crm.identity_contact.sidebar_jssdk.database_mode", lambda: "postgres")
     monkeypatch.setattr("aicrm_next.crm.identity_contact.sidebar_jssdk.PostgresOneIDService", OneIDService)
-    monkeypatch.setattr(
-        "aicrm_next.crm.identity_contact.sidebar_jssdk.enqueue_sidebar_identity_verification",
-        lambda **kwargs: planned.append(kwargs) or {"status": "queued", "real_external_call_executed": False},
-    )
     client = TestClient(create_app(), raise_server_exceptions=False)
     client.cookies.set(
         SIDEBAR_VIEWER_COOKIE,
@@ -219,48 +202,34 @@ def test_sidebar_context_token_returns_opaque_provisioning_state_for_unseen_cont
 
     response = client.post("/api/sidebar/context-token", json={"external_userid": "external-new"})
 
-    assert response.status_code == 202
-    assert response.json()["context_status"] == "provisioning"
-    assert response.json()["sidebar_owner_token"] == ""
-    assert response.json()["sync_token"]
-    assert "external-new" not in response.json()["sync_token"]
-    assert response.json()["retry_after"] == 2
-    assert planned == [
+    assert response.status_code == 200
+    assert response.json()["context_status"] == "ready"
+    assert response.json()["sidebar_owner_token_status"] == "issued"
+    assert OneIDService.ensured == [
         {
             "corp_id": "corp-a",
-            "owner_userid": "staff-a",
+            "owner_userid": "",
             "external_userid": "external-new",
+            "source_type": "sidebar_jssdk_context",
         }
     ]
 
 
-def test_sidebar_context_token_bootstraps_oneid_from_verified_follow_relation(
+def test_sidebar_context_token_reuses_oneid_without_requiring_follow_relation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("WECOM_CORP_ID", "corp-a")
 
-    class RelationService:
-        def authorize(self, **_kwargs) -> bool:
-            return True
-
-    class EnsuredIdentity:
-        customer_id = 42
-        identity_id = 84
-
     class OneIDService:
-        ensured: list[dict] = []
-
         def customer_context_state(self, **_kwargs):
-            return {"identity_exists": False, "relation_active": False}
+            return {
+                "identity_exists": True,
+                "relation_active": False,
+                "customer_id": 42,
+                "identity_id": 84,
+                "unionid_status": "pending",
+            }
 
-        def ensure_verified_wecom_identity(self, **kwargs):
-            self.ensured.append(kwargs)
-            return EnsuredIdentity()
-
-    monkeypatch.setattr(
-        "aicrm_next.crm.identity_contact.sidebar_jssdk.build_sidebar_authorization_service",
-        lambda: RelationService(),
-    )
     monkeypatch.setattr("aicrm_next.crm.identity_contact.sidebar_jssdk.database_mode", lambda: "postgres")
     monkeypatch.setattr("aicrm_next.crm.identity_contact.sidebar_jssdk.PostgresOneIDService", OneIDService)
     client = TestClient(create_app(), raise_server_exceptions=False)
@@ -282,14 +251,6 @@ def test_sidebar_context_token_bootstraps_oneid_from_verified_follow_relation(
     assert response.status_code == 200
     assert response.json()["context_status"] == "ready"
     assert response.json()["sidebar_owner_token_status"] == "issued"
-    assert OneIDService.ensured == [
-        {
-            "corp_id": "corp-a",
-            "owner_userid": "staff-a",
-            "external_userid": "external-existing",
-            "source_type": "sidebar_verified_follow_relation",
-        }
-    ]
 
 
 def test_sidebar_oauth_cookie_is_employee_scoped_and_callback_url_is_clean(

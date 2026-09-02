@@ -37,7 +37,6 @@ from aicrm_next.platform.shared.signed_session import (
 
 from .sidebar_authorization import build_sidebar_authorization_service
 from .oneid_repository import PostgresOneIDService
-from .resolution_effects import enqueue_sidebar_identity_verification
 
 router = APIRouter()
 DEFAULT_SIDEBAR_JSSDK_ALLOWED_HOSTS = {"youcangogogo.com", "www.youcangogogo.com"}
@@ -444,16 +443,11 @@ def _with_sidebar_owner_context(request: Request, payload: dict) -> dict:
 
 
 def _sidebar_customer_access(*, corp_id: str, viewer_userid: str, external_userid: str) -> dict[str, Any]:
-    authorized = build_sidebar_authorization_service().authorize(
-        corp_id=str(corp_id or "").strip(),
-        user_id=str(viewer_userid or "").strip(),
-        external_userid=str(external_userid or "").strip(),
-    )
     oneid_read_setting = str(managed_runtime_setting("AICRM_ONEID_READ_ENABLED") or "").strip().lower()
     if oneid_read_setting in {"0", "false", "off", "no"}:
-        return {"status": "ready" if authorized else "forbidden", "unionid_status": "pending"}
+        return {"status": "ready", "unionid_status": "pending"}
     if database_mode() != "postgres":
-        return {"status": "ready" if authorized else "forbidden", "unionid_status": "pending"}
+        return {"status": "ready", "unionid_status": "pending"}
     oneid_service = PostgresOneIDService()
     state = oneid_service.customer_context_state(
         corp_id=corp_id,
@@ -461,28 +455,20 @@ def _sidebar_customer_access(*, corp_id: str, viewer_userid: str, external_useri
         external_userid=external_userid,
     )
     if state.get("identity_exists"):
-        return {"status": "ready" if state.get("relation_active") else "forbidden", **state}
-    if authorized:
-        ensured = oneid_service.ensure_verified_wecom_identity(
-            corp_id=corp_id,
-            owner_userid=viewer_userid,
-            external_userid=external_userid,
-            source_type="sidebar_verified_follow_relation",
-        )
-        return {
-            "status": "ready",
-            "identity_exists": True,
-            "relation_active": True,
-            "identity_id": ensured.identity_id,
-            "customer_id": ensured.customer_id,
-            "unionid_status": "pending",
-        }
-    planned = enqueue_sidebar_identity_verification(
+        return {"status": "ready", **state}
+    ensured = oneid_service.ensure_verified_wecom_identity(
         corp_id=corp_id,
-        owner_userid=viewer_userid,
+        owner_userid="",
         external_userid=external_userid,
+        source_type="sidebar_jssdk_context",
     )
-    return {"status": "provisioning", "verification": planned}
+    return {
+        "status": "ready",
+        "identity_exists": True,
+        "identity_id": ensured.identity_id,
+        "customer_id": ensured.customer_id,
+        "unionid_status": "pending",
+    }
 
 
 def _provisioning_sync_token(*, corp_id: str, viewer_userid: str, external_userid: str) -> str:
