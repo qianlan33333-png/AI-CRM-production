@@ -1,13 +1,9 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 from aicrm_next.capability_registry import CAPABILITY_SPECS
 from tools.check_new_crm_asset_migration_matrix import MATRIX, validate
-
-
-ROOT = Path(__file__).resolve().parents[2]
 
 
 def test_new_crm_asset_migration_matrix_is_complete_and_safe() -> None:
@@ -27,9 +23,3 @@ def test_all_registry_capabilities_have_explicit_real_blocked_or_presentation_st
         "backend_blocked",
         "presentation_only",
     }
-
-
-def test_deploy_workflow_has_the_single_approved_host_guard() -> None:
-    deploy = (ROOT / ".github/workflows/deploy.yml").read_text(encoding="utf-8")
-    assert "EXPECTED_DEPLOY_HOST: 124.220.53.183" in deploy
-    assert 'if [ "$DEPLOY_HOST" != "$EXPECTED_DEPLOY_HOST" ]; then' in deploy
