@@ -77,3 +77,16 @@ def test_active_production_callback_relay_uses_current_host() -> None:
     assert "RELAY ONE CALLBACK FROM 124 TO 49" in relay
     assert "SHA256:qbHmMUPtj9373JhvK807wWcewj5xxhOfuCwq1gu16n8" in relay
     assert "150.158.82.186" not in relay
+
+
+def test_public_www_cutover_is_manual_exact_sha_and_guarded() -> None:
+    workflow = _workflow("public-www-production-cutover.yml")
+    source = (WORKFLOWS / "public-www-production-cutover.yml").read_text(encoding="utf-8")
+    assert set(workflow["on"]) == {"workflow_dispatch"}
+    assert workflow["jobs"]["cutover"]["environment"] == "production"
+    assert "CUTOVER_PUBLIC_WWW_TO_CURRENT_RELEASE" in source
+    assert "test \"$(git rev-parse HEAD)\" = \"$EXPECTED_RELEASE_SHA\"" in source
+    assert "ensure_production_public_release_route.py --execute" in source
+    assert "--local-health-url http://127.0.0.1:5001/health" in source
+    assert "--public-health-url \"$public_health_url\"" in source
+    assert "test \"$actual_sha\" = \"$EXPECTED_RELEASE_SHA\"" in source
